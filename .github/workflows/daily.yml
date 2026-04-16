@@ -1,45 +1,40 @@
-
-name: ViralAgent 19h30
+name: Agent Viral Quotidien
 
 on:
   schedule:
-    - cron: '30 19 * * *'  # 19h30 UTC = 19h30 Abidjan
+    # Tous les jours a 19h30 UTC (= 19h30 GMT = heure Abidjan)
+    - cron: "30 19 * * *"
   workflow_dispatch:
+    # Permet de lancer manuellement depuis GitHub
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  publish:
+  declencher-agent:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      
-      - name: Installer FFmpeg
-        run: sudo apt-get install -y ffmpeg
-      
-      - name: Installer dépendances
+      - name: Declencher le backend autonome
         run: |
-          cd backend || cd .
-          npm install
-          npx playwright install chromium --with-deps
-      
-      - name: Créer config
-        run: |
-          mkdir -p data output
-          echo '${{ secrets.CONFIG }}' > data/state.json
-      
-      - name: Lancer agent avec Gemini
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          TZ: Africa/Abidjan
-        run: |
-          cd backend || cd .
-          node server.js --run-once
-      
-      - uses: actions/upload-artifact@v4
-        with:
-          name: video-du-jour
-          path: output/
+          echo "========================================="
+          echo "  AGENT VIRAL - Declenchement quotidien"
+          echo "========================================="
+          
+          # Si tu as un backend Railway/VPS, decommante et configure:
+          # curl -X POST "${{ secrets.BACKEND_URL }}/run" \
+          #   -H "Authorization: Bearer ${{ secrets.BACKEND_TOKEN }}" \
+          #   --fail --silent --show-error
+          
+          # Pour l'instant, on affiche la config
+          echo ""
+          echo "Options de backend:"
+          echo "1. Railway: configure BACKEND_URL et BACKEND_TOKEN dans les secrets GitHub"
+          echo "2. VPS: le cron tourne directement sur le serveur (pas besoin de ce workflow)"
+          echo ""
+          echo "Pour activer:"
+          echo "- Va dans Settings > Secrets > Actions"
+          echo "- Ajoute BACKEND_URL = https://ton-backend.up.railway.app"
+          echo "- Ajoute BACKEND_TOKEN = ton_token_secret"
+          echo "- Decommante les lignes curl ci-dessus"
+          echo ""
+          echo "Status: En attente de configuration backend"
