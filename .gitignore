@@ -1,0 +1,8 @@
+node_modules/
+.env
+data/
+output/
+*.mp4
+*.mp3
+cookies_*.json
+.DS_Store

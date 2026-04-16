@@ -428,6 +428,16 @@ cron.schedule('30 19 * * *', () => {
 
 // ===== START =====
 await loadState();
+
+// Mode GitHub Actions : run once then exit
+if (process.argv.includes('--run-once')) {
+  console.log('🤖 Mode RUN-ONCE (GitHub Actions)');
+  await runDailyPlan();
+  await performLearning();
+  console.log('✅ Job terminé, exit');
+  process.exit(0);
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 ViralAgent Backend running on port ${PORT}`);
   console.log(`🧠 Gemini: ${GEMINI_KEY ? 'ACTIF' : 'désactivé (mode local)'}`);
