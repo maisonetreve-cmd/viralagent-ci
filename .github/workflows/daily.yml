@@ -1,0 +1,45 @@
+
+name: ViralAgent 19h30
+
+on:
+  schedule:
+    - cron: '30 19 * * *'  # 19h30 UTC = 19h30 Abidjan
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Installer FFmpeg
+        run: sudo apt-get install -y ffmpeg
+      
+      - name: Installer dépendances
+        run: |
+          cd backend || cd .
+          npm install
+          npx playwright install chromium --with-deps
+      
+      - name: Créer config
+        run: |
+          mkdir -p data output
+          echo '${{ secrets.CONFIG }}' > data/state.json
+      
+      - name: Lancer agent avec Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          TZ: Africa/Abidjan
+        run: |
+          cd backend || cd .
+          node server.js --run-once
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-du-jour
+          path: output/
