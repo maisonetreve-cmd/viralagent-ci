@@ -1,447 +1,629 @@
-import express from 'express';
-import cors from 'cors';
-import cron from 'node-cron';
+// ViralAgent Pro - Backend GitHub Actions
+// Groq (principal) + Pexels + FFmpeg + Edge TTS + Playwright
+// 100% gratuit - Cote d'Ivoire
+
 import dotenv from 'dotenv';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
-import fs from 'fs/promises';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync, exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-import EdgeTTS from 'edge-tts-universal';
-import { chromium } from 'playwright';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-ffmpeg.setFfmpegPath(ffmpegStatic);
-
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use('/output', express.static(path.join(__dirname, 'output')));
-
-const PORT = process.env.PORT || 3000;
+const GROQ_KEY = process.env.GROQ_API_KEY || '';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 const PEXELS_KEY = process.env.PEXELS_API_KEY || '';
 const DATA_DIR = path.join(__dirname, 'data');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 
-await fs.mkdir(DATA_DIR, { recursive: true });
-await fs.mkdir(OUTPUT_DIR, { recursive: true });
+// Créer dossiers
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-// In-memory storage (persist to file)
-let state = {
-  products: [],
-  accounts: [],
-  settings: {
-    pays: "Côte d'Ivoire",
-    monnaie: "FCFA",
-    whatsappDefault: "2250700000000",
-    heurePublication: "19:30",
-    timezone: "Africa/Abidjan"
-  },
-  jobs: [],
-  learning: {
-    bestHooks: [],
-    worstHooks: [],
-    bestAngles: [],
-    bestHeures: ["19:30"],
-    totalVideosAnalyzed: 0
-  }
-};
-
-async function loadState() {
-  try {
-    const data = await fs.readFile(path.join(DATA_DIR, 'state.json'), 'utf-8');
-    state = JSON.parse(data);
-    console.log('✓ État chargé');
-  } catch { console.log('→ Nouvel état'); }
+// ============================================
+// LOGS
+// ============================================
+function log(msg) {
+  const time = new Date().toLocaleTimeString('fr-FR');
+  console.log(`[${time}] ${msg}`);
 }
 
-async function saveState() {
-  await fs.writeFile(path.join(DATA_DIR, 'state.json'), JSON.stringify(state, null, 2));
+// ============================================
+// CHARGER CONFIG
+// ============================================
+function loadState() {
+  const statePath = path.join(DATA_DIR, 'state.json');
+  if (fs.existsSync(statePath)) {
+    try {
+      const raw = fs.readFileSync(statePath, 'utf8');
+      const data = JSON.parse(raw);
+      log(`✅ Config chargée: ${data.products?.length || 0} produits, ${data.accounts?.length || 0} comptes`);
+      return data;
+    } catch (e) {
+      log(`⚠️ Erreur lecture state.json: ${e.message}`);
+    }
+  }
+  log('⚠️ Pas de state.json - utilisation config demo');
+  return getDemoState();
 }
 
-// ===== GEMINI ORCHESTRATION =====
-const genAI = GEMINI_KEY ? new GoogleGenerativeAI(GEMINI_KEY) : null;
+function getDemoState() {
+  return {
+    products: [
+      {
+        id: 'demo1',
+        nom: 'Blender Portable USB',
+        type: 'physique',
+        prix: '12500',
+        description: 'Blender rechargeable parfait pour smoothies et jus frais',
+        whatsapp: process.env.WHATSAPP_DEFAULT || '2250700000000'
+      }
+    ],
+    accounts: [
+      {
+        id: 'acc1',
+        plateforme: 'TikTok',
+        login: '@demo_compte',
+        actif: true,
+        produits: ['demo1']
+      }
+    ],
+    settings: {
+      pays: "Côte d'Ivoire",
+      monnaie: 'FCFA',
+      whatsappDefault: process.env.WHATSAPP_DEFAULT || '2250700000000',
+      heurePublication: '19:30'
+    },
+    learning: {
+      bestHooks: [],
+      worstHooks: [],
+      videoHistory: []
+    }
+  };
+}
 
-async function orchestrateWithGemini(product, account, personaMemory) {
-  if (!genAI) {
-    // Fallback local
-    return {
-      persona: { nom: "Awa", age: 28, ville: "Yopougon", ton: "amical", probleme: "manque de temps" },
-      hook: `STOP ! Tu perds de l'argent avec ${product.nom} ?`,
-      script: `Les filles d'Abidjan, ${product.description} Prix ${product.prix} FCFA. Écris ${product.whatsapp || state.settings.whatsappDefault}`,
-      angle: "problème-solution",
-      hashtags: ["#abidjan", "#bonplan225", "#madeinci"]
-    };
+// ============================================
+// APPEL LLM (GROQ EN PRIORITÉ)
+// ============================================
+async function callLLM(prompt) {
+  // Essai 1 : Groq
+  if (GROQ_KEY) {
+    try {
+      log('🧠 Appel Groq (llama-3.3-70b)...');
+      const res = await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.8,
+          max_tokens: 1000
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GROQ_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+      const text = res.data.choices[0].message.content;
+      log('✅ Groq OK');
+      return text;
+    } catch (e) {
+      log(`⚠️ Groq erreur: ${e.message} - essai Gemini...`);
+    }
   }
 
-  const learningPrompt = state.learning.totalVideosAnalyzed > 2 ? `
-APPRENTISSAGE:
-- Meilleurs hooks: ${state.learning.bestHooks.map(h=>`"${h.hook}" (${h.avgVues} vues)`).join(', ')}
-- À ÉVITER: ${state.learning.worstHooks.join(', ')}
-- Meilleures heures: ${state.learning.bestHeures.join(', ')}
-` : '';
+  // Essai 2 : Gemini
+  if (GEMINI_KEY) {
+    try {
+      log('🧠 Appel Gemini 2.0 Flash...');
+      const res = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+        { contents: [{ parts: [{ text: prompt }] }] },
+        { timeout: 30000 }
+      );
+      const text = res.data.candidates[0].content.parts[0].text;
+      log('✅ Gemini OK');
+      return text;
+    } catch (e) {
+      log(`⚠️ Gemini erreur: ${e.message} - mode local...`);
+    }
+  }
 
-  const prompt = `Tu es ViralAgent Pro, expert TikTok Côte d'Ivoire.
+  // Essai 3 : Mode local
+  log('⚠️ Pas de LLM disponible - génération locale');
+  return null;
+}
 
-PRODUIT: ${product.nom} (${product.type}) - ${product.prix} FCFA
-Description: ${product.description}
-WhatsApp: ${product.whatsapp || state.settings.whatsappDefault}
-Compte: ${account.login} sur ${account.plateforme}
+// ============================================
+// CRÉER SCRIPT VIRAL
+// ============================================
+async function createScript(product, state) {
+  const bestHooks = state.learning?.bestHooks?.slice(0, 3) || [];
+  const worstHooks = state.learning?.worstHooks?.slice(0, 3) || [];
+  const whatsapp = product.whatsapp || state.settings?.whatsappDefault || '2250700000000';
 
-${learningPrompt}
+  const prompt = `Tu es un expert marketing TikTok pour la Côte d'Ivoire.
 
-PERSONA PRÉCÉDENT (reste cohérent): ${JSON.stringify(personaMemory)}
+PRODUIT: ${product.nom}
+PRIX: ${product.prix} FCFA
+DESCRIPTION: ${product.description}
+WHATSAPP: ${whatsapp}
 
-MISSION: Crée un script viral 15-20s pour Abidjan.
+${bestHooks.length > 0 ? `HOOKS QUI MARCHENT (réutilise ce style): ${bestHooks.join(', ')}` : ''}
+${worstHooks.length > 0 ? `HOOKS À ÉVITER: ${worstHooks.join(', ')}` : ''}
+
+Crée un script TikTok viral de 20 secondes pour Abidjan.
 RÈGLES:
-- Parle comme une ivoirienne (nouchi léger, références Yopougon/Cocody/Treichville)
-- Hook 0-3s ultra puissant, JAMAIS copié des anciens
-- Problème → Solution → Preuve (chiffre précis) → CTA WhatsApp
-- Utilise l'apprentissage pour éviter les flops
+- Hook choc (0-3s) qui surprend
+- Parle comme un ivoirien authentique (pas de nouchi excessif)
+- Mentionne un problème réel de la vie quotidienne à Abidjan
+- Solution = le produit
+- CTA: "Écris-moi sur WhatsApp 👉 wa.me/${whatsapp}"
+- JAMAIS de hook déjà utilisé
 
-Réponds UNIQUEMENT en JSON:
+Réponds en JSON:
 {
-  "persona": {"nom":"...", "age":24, "ville":"Yopougon", "ton":"maternel", "probleme":"..."},
-  "hook": "Phrase d'accroche 0-3s",
-  "script": "Script complet 15s avec ton naturel ivoirien",
-  "angle": "probleme-solution ou temoignage ou fomo",
-  "hashtags": ["#abidjan","#bonplan225","#..."],
-  "dureeEstimee": 18
+  "persona": "prénom, âge, quartier",
+  "hook": "phrase d'accroche 0-3s",
+  "probleme": "douleur du client",
+  "solution": "comment le produit aide",
+  "preuve": "chiffre ou bénéfice concret",
+  "cta": "appel à action",
+  "narration": "texte complet 20 secondes à lire",
+  "hashtags": ["#tag1", "#tag2"],
+  "description": "description optimisée TikTok"
 }`;
 
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { temperature: 0.95 } });
-    const result = await model.generateContent(prompt);
-    let text = result.response.text().replace(/```json|```/g, '').trim();
-    return JSON.parse(text);
-  } catch (e) {
-    console.error('Gemini error:', e.message);
-    return orchestrateWithGemini(product, account, {}); // fallback
-  }
-}
+  const response = await callLLM(prompt);
 
-// ===== PEXELS VIDEO =====
-async function fetchPexelsVideo(query) {
-  if (!PEXELS_KEY) {
-    // Fallback: image unsplash as video placeholder
-    return 'https://videos.pexels.com/video-files/853800/853800-hd_1080_1920_25fps.mp4';
-  }
-  try {
-    const res = await axios.get(`https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=15&orientation=portrait`, {
-      headers: { Authorization: PEXELS_KEY }
-    });
-    const videos = res.data.videos.filter(v => v.width < v.height);
-    if (!videos.length) throw new Error('No vertical');
-    const v = videos[Math.floor(Math.random() * Math.min(5, videos.length))];
-    const file = v.video_files.find(f => f.height >= 1080) || v.video_files[0];
-    return file.link;
-  } catch {
-    return 'https://videos.pexels.com/video-files/3196235/3196235-hd_1080_1920_25fps.mp4';
-  }
-}
-
-// ===== EDGE TTS =====
-async function generateVoice(text, voice = 'fr-FR-DeniseNeural') {
-  const id = uuidv4();
-  const outputPath = path.join(OUTPUT_DIR, `${id}.mp3`);
-  
-  try {
-    const tts = new EdgeTTS({ voice });
-    await tts.synthesize(text, outputPath);
-    return outputPath;
-  } catch (e) {
-    console.error('TTS error:', e);
-    // Create silent audio as fallback
-    await new Promise((resolve) => {
-      ffmpeg()
-        .input('anullsrc=r=44100:cl=mono')
-        .inputFormat('lavfi')
-        .duration(15)
-        .audioCodec('libmp3lame')
-        .save(outputPath)
-        .on('end', resolve);
-    });
-    return outputPath;
-  }
-}
-
-// ===== VIDEO CREATION =====
-async function createVideo(product, script, hook) {
-  const id = uuidv4();
-  const videoPath = path.join(OUTPUT_DIR, `${id}.mp4`);
-  
-  console.log(`🎬 Création vidéo pour ${product.nom}`);
-  
-  // 1. Fetch background
-  const videoUrl = await fetchPexelsVideo(product.categorie || product.nom);
-  const bgPath = path.join(OUTPUT_DIR, `${id}_bg.mp4`);
-  const bgRes = await axios({ url: videoUrl, responseType: 'arraybuffer' });
-  await fs.writeFile(bgPath, bgRes.data);
-  
-  // 2. Generate voice
-  const audioPath = await generateVoice(script);
-  
-  // 3. Create subtitles SRT
-  const srtPath = path.join(OUTPUT_DIR, `${id}.srt`);
-  const words = hook.split(' ').slice(0, 8).join(' ');
-  const srtContent = `1
-00:00:00,000 --> 00:00:03,000
-${words.toUpperCase()}
-
-2
-00:00:03,000 --> 00:00:08,000
-${product.nom} - ${product.prix} FCFA
-
-3
-00:00:08,000 --> 00:00:15,000
-WhatsApp: ${product.whatsapp || state.settings.whatsappDefault}
-`;
-  await fs.writeFile(srtPath, srtContent);
-  
-  // 4. FFmpeg montage
-  await new Promise((resolve, reject) => {
-    ffmpeg(bgPath)
-      .input(audioPath)
-      .outputOptions([
-        '-vf', `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles=${srtPath}:force_style='FontName=Arial,FontSize=28,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=100'`,
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '23',
-        '-c:a', 'aac',
-        '-shortest',
-        '-t', '20'
-      ])
-      .save(videoPath)
-      .on('end', resolve)
-      .on('error', reject);
-  });
-  
-  // Cleanup
-  await fs.unlink(bgPath).catch(()=>{});
-  await fs.unlink(audioPath).catch(()=>{});
-  await fs.unlink(srtPath).catch(()=>{});
-  
-  console.log(`✓ Vidéo créée: ${id}.mp4`);
-  return { id, path: videoPath, url: `/output/${id}.mp4` };
-}
-
-// ===== PUBLISH WITH PLAYWRIGHT =====
-async function publishToAccount(account, videoPath, caption) {
-  console.log(`📤 Publication ${account.plateforme} ${account.login}`);
-  
-  const browser = await chromium.launch({ 
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-  
-  const context = await browser.newContext({
-    viewport: { width: 390, height: 844 },
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'
-  });
-  
-  // Load cookies if exist
-  const cookiesPath = path.join(DATA_DIR, `cookies_${account.id}.json`);
-  try {
-    const cookies = JSON.parse(await fs.readFile(cookiesPath, 'utf-8'));
-    await context.addCookies(cookies);
-  } catch {}
-  
-  const page = await context.newPage();
-  
-  try {
-    if (account.plateforme === 'TikTok') {
-      await page.goto('https://www.tiktok.com/upload', { waitUntil: 'networkidle' });
-      await page.waitForTimeout(3000);
-      // Upload logic (simplified - real would need login handling)
-      const input = await page.$('input[type="file"]');
-      if (input) {
-        await input.setInputFiles(videoPath);
-        await page.waitForTimeout(5000);
-        await page.fill('input[placeholder*="description"]', caption.slice(0, 2200));
-        await page.waitForTimeout(2000);
-        // await page.click('button:has-text("Post")');
-        console.log('✓ TikTok upload simulé');
-      }
-    } else {
-      await page.goto('https://www.instagram.com/', { waitUntil: 'networkidle' });
-      console.log('✓ Instagram upload simulé');
-    }
-    
-    // Save cookies
-    await fs.writeFile(cookiesPath, JSON.stringify(await context.cookies()));
-    
-    await browser.close();
-    return { success: true, platform: account.plateforme };
-  } catch (e) {
-    await browser.close();
-    console.error('Publish error:', e.message);
-    return { success: false, error: e.message };
-  }
-}
-
-// ===== DAILY AUTONOMOUS JOB =====
-async function runDailyPlan() {
-  console.log('🤖 Démarrage plan quotidien autonome...');
-  const now = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Abidjan' });
-  
-  const activeAccounts = state.accounts.filter(a => a.actif && a.produitsIds.length > 0);
-  
-  for (const account of activeAccounts) {
-    // Rotation produit
-    const productId = account.produitsIds[Math.floor(Date.now() / 86400000) % account.produitsIds.length];
-    const product = state.products.find(p => p.id === productId);
-    if (!product) continue;
-    
+  if (response) {
     try {
-      // 1. Orchestration Gemini
-      const personaMemory = state.jobs.filter(j=>j.accountId===account.id).slice(-3);
-      const creative = await orchestrateWithGemini(product, account, personaMemory);
-      
-      // 2. Vidéo
-      const video = await createVideo(product, creative.script, creative.hook);
-      
-      // 3. Caption
-      const caption = `${creative.hook}\n\n${product.description}\n\nPrix: ${product.prix} ${state.settings.monnaie}\n📲 WhatsApp: ${product.whatsapp || state.settings.whatsappDefault}\n\n${creative.hashtags.join(' ')} #${product.categorie || 'ci'}`;
-      
-      // 4. Publication
-      const pubResult = await publishToAccount(account, video.path, caption);
-      
-      // 5. Sauvegarde job
-      const job = {
-        id: uuidv4(),
-        date: now,
-        accountId: account.id,
-        productId: product.id,
-        script: creative.script,
-        hook: creative.hook,
-        status: pubResult.success ? 'publié' : 'échec',
-        vues: Math.floor(Math.random() * 3000) + 800, // Simulated - real would fetch
-        likes: Math.floor(Math.random() * 200) + 50,
-        whatsappCible: product.whatsapp || state.settings.whatsappDefault,
-        videoUrl: video.url,
-        persona: creative.persona
-      };
-      
-      state.jobs.unshift(job);
-      if (state.jobs.length > 100) state.jobs.pop();
-      
-      await saveState();
-      
-      console.log(`✓ ${account.login} → ${product.nom} publié`);
-      
-      // Délai anti-spam
-      await new Promise(r => setTimeout(r, 120000)); // 2 min
-      
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const script = JSON.parse(jsonMatch[0]);
+        log(`✅ Script créé - Persona: ${script.persona}`);
+        log(`🎣 Hook: "${script.hook}"`);
+        return script;
+      }
     } catch (e) {
-      console.error(`✗ Erreur ${account.login}:`, e.message);
+      log(`⚠️ Parse JSON erreur: ${e.message}`);
     }
   }
-  
-  // Apprentissage auto tous les 3 jobs
-  if (state.jobs.filter(j=>j.status==='publié').length % 3 === 0) {
-    await performLearning();
+
+  // Script local de secours
+  const hooks = [
+    `POV : tu cherches ${product.nom} à Abidjan et tu paies trop cher...`,
+    `Les gens d'Abidjan connaissent pas encore ça ! ${product.nom} à ${product.prix} FCFA`,
+    `Attends ! Avant d'aller au marché, regarde ça - ${product.nom}`,
+    `Ma sœur m'a montré ça et j'ai économisé avec ${product.nom}`,
+    `Pourquoi tu dépenses plus alors que ${product.nom} existe ?`
+  ];
+
+  const personas = [
+    'Kadidia, 24 ans, Yopougon',
+    'Awa, 28 ans, Cocody',
+    'Kevin, 23 ans, Adjamé',
+    'Mariam, 31 ans, Treichville',
+    'Kofi, 26 ans, Abobo'
+  ];
+
+  const randomHook = hooks[Math.floor(Math.random() * hooks.length)];
+  const randomPersona = personas[Math.floor(Math.random() * personas.length)];
+
+  return {
+    persona: randomPersona,
+    hook: randomHook,
+    probleme: `Trouver ${product.nom} de qualité à bon prix à Abidjan`,
+    solution: `${product.nom} disponible maintenant à seulement ${product.prix} FCFA`,
+    preuve: `Déjà plus de 200 clients satisfaits à Abidjan`,
+    cta: `Écris-moi sur WhatsApp 👉 wa.me/${whatsapp}`,
+    narration: `${randomHook} Moi c'est ${randomPersona.split(',')[0]}, j'ai trouvé ${product.nom} à ${product.prix} FCFA seulement. ${product.description}. Plus de 200 personnes à Abidjan l'ont déjà. Écris-moi sur WhatsApp maintenant !`,
+    hashtags: ['#abidjan', '#bonplan225', '#cotedivoire', '#tiktokci', `#${product.nom.toLowerCase().replace(/\s/g, '')}`],
+    description: `🔥 ${product.nom} à ${product.prix} FCFA seulement ! Contacte-moi sur WhatsApp 👉 wa.me/${whatsapp}\n\n#abidjan #bonplan225 #cotedivoire`
+  };
+}
+
+// ============================================
+// TÉLÉCHARGER VIDÉO PEXELS
+// ============================================
+async function downloadPexelsVideo(query, outputPath) {
+  if (!PEXELS_KEY) {
+    log('⚠️ Pas de clé Pexels - création fond coloré');
+    return createColorBackground(outputPath);
   }
-  
-  console.log('✅ Plan quotidien terminé');
-}
 
-async function performLearning() {
-  if (!genAI || state.jobs.length < 3) return;
-  
-  const published = state.jobs.filter(j => j.vues).slice(0, 15);
-  const top = [...published].sort((a,b)=>(b.vues||0)-(a.vues||0)).slice(0,3);
-  const flop = [...published].sort((a,b)=>(a.vues||0)-(b.vues||0)).slice(0,3);
-  
-  const prompt = `Analyse TikTok CI. TOP: ${top.map(t=>`"${t.hook}" ${t.vues}v`).join('; ')}. FLOPS: ${flop.map(f=>`"${f.hook}" ${f.vues}v`).join('; ')}. Retourne JSON: {"bestHooks":[{"hook":"...","avgVues":0}],"worstHooks":["..."],"bestHeures":["19:30"]}`;
-  
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const result = await model.generateContent(prompt);
-    const data = JSON.parse(result.response.text().replace(/```json|```/g, '').trim());
-    state.learning = { ...state.learning, ...data, totalVideosAnalyzed: published.length, lastAnalysis: new Date().toISOString() };
-    await saveState();
-    console.log('🧠 Apprentissage mis à jour');
-  } catch {}
+    log(`🎥 Recherche Pexels: "${query}"...`);
+    const searches = [query, 'african market', 'african woman shopping', 'african business', 'abidjan'];
+
+    for (const searchQuery of searches) {
+      try {
+        const res = await axios.get('https://api.pexels.com/videos/search', {
+          headers: { Authorization: PEXELS_KEY },
+          params: {
+            query: searchQuery,
+            per_page: 15,
+            page: Math.floor(Math.random() * 3) + 1,
+            orientation: 'portrait'
+          },
+          timeout: 15000
+        });
+
+        const videos = res.data.videos;
+        if (!videos || videos.length === 0) continue;
+
+        const video = videos[Math.floor(Math.random() * videos.length)];
+        const files = video.video_files.filter(f => f.width <= 1080);
+        if (!files.length) continue;
+
+        const bestFile = files.reduce((a, b) =>
+          Math.abs(a.width - 720) < Math.abs(b.width - 720) ? a : b
+        );
+
+        log(`⬇️ Téléchargement vidéo Pexels (${bestFile.width}x${bestFile.height})...`);
+
+        const writer = fs.createWriteStream(outputPath);
+        const response = await axios({
+          url: bestFile.link,
+          method: 'GET',
+          responseType: 'stream',
+          timeout: 60000
+        });
+
+        await new Promise((resolve, reject) => {
+          response.data.pipe(writer);
+          writer.on('finish', resolve);
+          writer.on('error', reject);
+        });
+
+        const stats = fs.statSync(outputPath);
+        if (stats.size > 100000) {
+          log(`✅ Vidéo Pexels OK (${Math.round(stats.size / 1024)} Ko)`);
+          return true;
+        }
+      } catch (e) {
+        log(`⚠️ Pexels "${searchQuery}": ${e.message}`);
+        continue;
+      }
+    }
+  } catch (e) {
+    log(`⚠️ Pexels erreur: ${e.message}`);
+  }
+
+  log('⚠️ Pexels échoué - fond coloré utilisé');
+  return createColorBackground(outputPath);
 }
 
-// ===== API ROUTES =====
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    gemini: !!GEMINI_KEY, 
-    pexels: !!PEXELS_KEY,
-    jobs: state.jobs.length,
-    products: state.products.length,
-    accounts: state.accounts.length,
-    learning: state.learning.totalVideosAnalyzed
+// ============================================
+// CRÉER FOND COLORÉ (fallback sans Pexels)
+// ============================================
+function createColorBackground(outputPath) {
+  try {
+    const colors = ['0066CC', 'FF6600', '009900', 'CC0066', '6600CC'];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+
+    execSync(
+      `ffmpeg -f lavfi -i color=c=#${color}:size=1080x1920:rate=30 -t 25 -c:v libx264 -preset ultrafast -y "${outputPath}"`,
+      { stdio: 'pipe', timeout: 30000 }
+    );
+    log('✅ Fond coloré créé');
+    return true;
+  } catch (e) {
+    log(`❌ Erreur fond coloré: ${e.message}`);
+    return false;
+  }
+}
+
+// ============================================
+// GÉNÉRER VOIX (Edge TTS via commande système ou fallback)
+// ============================================
+async function generateVoice(text, outputPath) {
+  // Essai 1 : edge-tts (si installé)
+  try {
+    execSync(`edge-tts --voice fr-FR-DeniseNeural --text "${text.replace(/"/g, "'").substring(0, 500)}" --write-media "${outputPath}"`,
+      { stdio: 'pipe', timeout: 30000 }
+    );
+    if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
+      log('✅ Voix Edge TTS OK');
+      return true;
+    }
+  } catch (e) {
+    log(`⚠️ Edge TTS: ${e.message}`);
+  }
+
+  // Essai 2 : Créer silence (permet quand même la vidéo)
+  try {
+    execSync(
+      `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 20 -c:a aac -y "${outputPath}"`,
+      { stdio: 'pipe', timeout: 15000 }
+    );
+    log('⚠️ Audio silence (ajoute voix manuellement)');
+    return true;
+  } catch (e) {
+    log(`❌ Audio erreur: ${e.message}`);
+    return false;
+  }
+}
+
+// ============================================
+// MONTER LA VIDÉO FINALE
+// ============================================
+async function buildVideo(bgPath, audioPath, script, outputPath) {
+  return new Promise((resolve) => {
+    const hook = (script.hook || '').replace(/'/g, "\\'").substring(0, 60);
+    const cta = (script.cta || '').replace(/'/g, "\\'").substring(0, 60);
+    const produit = (script.solution || '').replace(/'/g, "\\'").substring(0, 50);
+
+    // Filtres sous-titres dynamiques style TikTok
+    const drawtext = [
+      // Fond semi-transparent en haut
+      `drawbox=x=0:y=80:w=iw:h=120:color=black@0.6:t=fill`,
+      // Hook en haut (blanc, gras)
+      `drawtext=text='${hook}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=100:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:enable='between(t,0,8)'`,
+      // Produit au milieu
+      `drawbox=x=0:y=820:w=iw:h=100:color=black@0.5:t=fill`,
+      `drawtext=text='${produit}':fontsize=36:fontcolor=yellow:x=(w-text_w)/2:y=840:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:enable='between(t,5,15)'`,
+      // CTA en bas (rouge vif)
+      `drawbox=x=0:y=1700:w=iw:h=120:color=red@0.85:t=fill`,
+      `drawtext=text='${cta}':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=1725:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:enable='between(t,10,20)'`
+    ].join(',');
+
+    const hasAudio = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000;
+    const audioInput = hasAudio ? `-i "${audioPath}"` : '';
+    const audioMap = hasAudio ? '-map 0:v -map 1:a' : '';
+    const audioCodec = hasAudio ? '-c:a aac -shortest' : '-an';
+
+    const cmd = `ffmpeg -i "${bgPath}" ${audioInput} -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,${drawtext}" ${audioMap} -c:v libx264 -preset ultrafast -crf 28 ${audioCodec} -t 22 -y "${outputPath}"`;
+
+    log('🎬 FFmpeg montage en cours...');
+    exec(cmd, { timeout: 120000 }, (err, stdout, stderr) => {
+      if (err) {
+        log(`⚠️ FFmpeg erreur: ${err.message}`);
+        // Essai simple sans texte
+        const simpleCmd = `ffmpeg -i "${bgPath}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -c:v libx264 -preset ultrafast -an -t 22 -y "${outputPath}"`;
+        exec(simpleCmd, { timeout: 60000 }, (err2) => {
+          if (err2) {
+            log(`❌ FFmpeg simple erreur: ${err2.message}`);
+            resolve(false);
+          } else {
+            log('✅ Vidéo simple OK (sans sous-titres)');
+            resolve(true);
+          }
+        });
+      } else {
+        log('✅ Vidéo montée avec sous-titres');
+        resolve(true);
+      }
+    });
   });
-});
-
-app.post('/api/config', async (req, res) => {
-  const { products, accounts, settings } = req.body;
-  if (products) state.products = products;
-  if (accounts) state.accounts = accounts;
-  if (settings) state.settings = { ...state.settings, ...settings };
-  await saveState();
-  res.json({ success: true });
-});
-
-app.get('/api/state', (req, res) => {
-  res.json(state);
-});
-
-app.post('/api/generate', async (req, res) => {
-  const { productId, accountId } = req.body;
-  const product = state.products.find(p=>p.id===productId);
-  const account = state.accounts.find(a=>a.id===accountId);
-  if (!product || !account) return res.status(404).json({ error: 'Not found' });
-  
-  const creative = await orchestrateWithGemini(product, account, {});
-  const video = await createVideo(product, creative.script, creative.hook);
-  
-  res.json({ creative, video: video.url });
-});
-
-app.post('/api/run-now', async (req, res) => {
-  runDailyPlan(); // async
-  res.json({ started: true, message: 'Plan quotidien lancé' });
-});
-
-app.post('/api/learn', async (req, res) => {
-  await performLearning();
-  res.json(state.learning);
-});
-
-// ===== CRON - 19:30 Abidjan =====
-cron.schedule('30 19 * * *', () => {
-  console.log('⏰ Cron 19:30 Abidjan déclenché');
-  runDailyPlan();
-}, { timezone: 'Africa/Abidjan' });
-
-// ===== START =====
-await loadState();
-
-// Mode GitHub Actions : run once then exit
-if (process.argv.includes('--run-once')) {
-  console.log('🤖 Mode RUN-ONCE (GitHub Actions)');
-  await runDailyPlan();
-  await performLearning();
-  console.log('✅ Job terminé, exit');
-  process.exit(0);
 }
 
-app.listen(PORT, () => {
-  console.log(`🚀 ViralAgent Backend running on port ${PORT}`);
-  console.log(`🧠 Gemini: ${GEMINI_KEY ? 'ACTIF' : 'désactivé (mode local)'}`);
-  console.log(`🎥 Pexels: ${PEXELS_KEY ? 'ACTIF' : 'mode démo'}`);
-  console.log(`⏰ Publication auto: 19:30 Africa/Abidjan`);
-  console.log(`📊 Dashboard: http://localhost:${PORT}/api/health`);
-});
+// ============================================
+// SAUVEGARDER RÉSULTAT
+// ============================================
+function saveResult(state, account, product, script, videoPath) {
+  const result = {
+    id: uuidv4(),
+    date: new Date().toISOString(),
+    account: account.login,
+    plateforme: account.plateforme,
+    product: product.nom,
+    hook: script.hook,
+    persona: script.persona,
+    videoPath: videoPath,
+    views: 0,
+    likes: 0,
+    statut: 'généré'
+  };
+
+  if (!state.learning) state.learning = { bestHooks: [], worstHooks: [], videoHistory: [] };
+  if (!state.learning.videoHistory) state.learning.videoHistory = [];
+
+  state.learning.videoHistory.push(result);
+
+  // Garder seulement les 30 derniers
+  if (state.learning.videoHistory.length > 30) {
+    state.learning.videoHistory = state.learning.videoHistory.slice(-30);
+  }
+
+  const statePath = path.join(DATA_DIR, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  log(`💾 Résultat sauvegardé: ${account.login} - ${product.nom}`);
+
+  return result;
+}
+
+// ============================================
+// APPRENTISSAGE AUTOMATIQUE
+// ============================================
+async function learnFromHistory(state) {
+  const history = state.learning?.videoHistory || [];
+  if (history.length < 3) {
+    log(`📊 Apprentissage: ${history.length}/3 vidéos nécessaires`);
+    return;
+  }
+
+  log('🧠 Apprentissage automatique en cours...');
+
+  const withStats = history.filter(v => v.views > 0);
+  if (withStats.length === 0) {
+    log('📊 Pas encore de stats de vues - apprentissage reporté');
+    return;
+  }
+
+  const sorted = [...withStats].sort((a, b) => b.views - a.views);
+  const best = sorted.slice(0, 3).map(v => v.hook);
+  const worst = sorted.slice(-3).map(v => v.hook);
+
+  state.learning.bestHooks = best;
+  state.learning.worstHooks = worst;
+
+  log(`✅ Apprentissage: meilleurs hooks = ${best.slice(0, 1).join(', ')}`);
+
+  const prompt = `Analyse ces données TikTok Côte d'Ivoire:
+MEILLEURS HOOKS (${sorted[0]?.views || 0} vues): ${best.join(' | ')}
+MAUVAIS HOOKS (${sorted[sorted.length-1]?.views || 0} vues): ${worst.join(' | ')}
+Donne 1 conseil en 1 phrase pour améliorer les prochains hooks.`;
+
+  const conseil = await callLLM(prompt);
+  if (conseil) {
+    log(`💡 Conseil IA: ${conseil.substring(0, 100)}...`);
+    state.learning.lastAdvice = conseil;
+  }
+}
+
+// ============================================
+// PLAN QUOTIDIEN PRINCIPAL
+// ============================================
+async function runDailyPlan() {
+  log('');
+  log('========================================');
+  log('🚀 VIRALAGENT PRO - DÉMARRAGE');
+  log(`📅 ${new Date().toLocaleString('fr-FR')}`);
+  log('========================================');
+
+  const state = loadState();
+
+  if (!state.products || state.products.length === 0) {
+    log('❌ Aucun produit configuré. Ajoute des produits dans l\'app Netlify.');
+    process.exit(1);
+  }
+
+  if (!state.accounts || state.accounts.length === 0) {
+    log('❌ Aucun compte configuré. Ajoute des comptes dans l\'app Netlify.');
+    process.exit(1);
+  }
+
+  const activeAccounts = state.accounts.filter(a => a.actif !== false);
+  log(`👥 ${activeAccounts.length} compte(s) actif(s) sur ${state.accounts.length}`);
+
+  // Apprentissage automatique
+  await learnFromHistory(state);
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < activeAccounts.length; i++) {
+    const account = activeAccounts[i];
+    log('');
+    log(`--- Compte ${i + 1}/${activeAccounts.length}: ${account.plateforme} ${account.login} ---`);
+
+    // Choisir produit pour ce compte
+    const accountProducts = account.produits || [];
+    const availableProducts = state.products.filter(p =>
+      accountProducts.length === 0 || accountProducts.includes(p.id)
+    );
+
+    if (availableProducts.length === 0) {
+      log(`⚠️ Aucun produit assigné à ${account.login} - skip`);
+      continue;
+    }
+
+    // Rotation : choisir produit pas encore utilisé récemment
+    const recentHooks = (state.learning?.videoHistory || [])
+      .filter(v => v.account === account.login)
+      .slice(-5)
+      .map(v => v.product);
+
+    let product = availableProducts.find(p => !recentHooks.includes(p.nom));
+    if (!product) product = availableProducts[Math.floor(Math.random() * availableProducts.length)];
+
+    log(`📦 Produit choisi: ${product.nom}`);
+
+    const jobId = uuidv4().substring(0, 8);
+    const bgPath = path.join(OUTPUT_DIR, `bg_${jobId}.mp4`);
+    const audioPath = path.join(OUTPUT_DIR, `audio_${jobId}.mp3`);
+    const finalPath = path.join(OUTPUT_DIR, `video_${account.plateforme}_${jobId}.mp4`);
+
+    try {
+      // 1. Créer script avec LLM
+      log('📝 Création script viral...');
+      const script = await createScript(product, state);
+
+      // 2. Télécharger fond vidéo
+      const searchQuery = `${product.nom} africa shopping`;
+      await downloadPexelsVideo(searchQuery, bgPath);
+
+      // 3. Générer voix
+      log('🗣️ Génération voix...');
+      await generateVoice(script.narration || script.hook, audioPath);
+
+      // 4. Monter vidéo
+      const videoOk = await buildVideo(bgPath, audioPath, script, finalPath);
+
+      if (videoOk && fs.existsSync(finalPath)) {
+        const stats = fs.statSync(finalPath);
+        log(`✅ Vidéo créée: ${path.basename(finalPath)} (${Math.round(stats.size / 1024)} Ko)`);
+
+        // 5. Sauvegarder résultat
+        saveResult(state, account, product, script, finalPath);
+
+        // 6. Afficher description pour publication manuelle
+        log('');
+        log('📋 DESCRIPTION POUR TIKTOK/INSTAGRAM:');
+        log('---');
+        log(script.description || `🔥 ${product.nom} - ${product.prix} FCFA\nwa.me/${product.whatsapp || state.settings?.whatsappDefault}`);
+        log('---');
+        log(`🏷️ HASHTAGS: ${(script.hashtags || []).join(' ')}`);
+
+        successCount++;
+      } else {
+        log(`❌ Vidéo échouée pour ${account.login}`);
+        failCount++;
+      }
+
+      // Nettoyage fichiers temporaires
+      [bgPath, audioPath].forEach(f => {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      });
+
+      // Pause entre comptes (5 min = évite détection)
+      if (i < activeAccounts.length - 1) {
+        log('⏳ Pause 10 secondes avant prochain compte...');
+        await new Promise(r => setTimeout(r, 10000));
+      }
+
+    } catch (e) {
+      log(`❌ Erreur compte ${account.login}: ${e.message}`);
+      failCount++;
+    }
+  }
+
+  log('');
+  log('========================================');
+  log(`✅ TERMINÉ: ${successCount} vidéo(s) créée(s), ${failCount} échec(s)`);
+  log(`📁 Vidéos dans: output/ (télécharge depuis GitHub Artifacts)`);
+  log('========================================');
+
+  if (successCount === 0 && failCount > 0) {
+    process.exit(1);
+  }
+}
+
+// ============================================
+// POINT D'ENTRÉE
+// ============================================
+const args = process.argv.slice(2);
+
+if (args.includes('--run-once')) {
+  // Mode GitHub Actions
+  log('🤖 Mode GitHub Actions - exécution unique');
+  runDailyPlan().catch(e => {
+    log(`❌ Erreur fatale: ${e.message}`);
+    console.error(e);
+    process.exit(1);
+  });
+} else {
+  // Mode serveur local (test)
+  log('🖥️ Mode serveur local - test uniquement');
+  runDailyPlan().catch(e => {
+    log(`❌ Erreur: ${e.message}`);
+  });
+}
