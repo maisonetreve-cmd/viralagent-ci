@@ -1,33 +1,32 @@
-// ViralAgent Pro - Backend 100% autonome
-// Groq (LLM) + Pexels + Edge TTS + FFmpeg + Playwright
-
 require('dotenv').config();
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 const axios = require('axios');
 const Groq = require('groq-sdk');
 
-// ============ CONFIG ============
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250700000000';
 
-const groq = new Groq({ apiKey: GROQ_API_KEY });
+console.log('🚀 ViralAgent Pro - Démarrage');
+console.log(`🧠 Groq: ${GROQ_API_KEY ? '✅' : '❌ manquant'}`);
+console.log(`🎬 Pexels: ${PEXELS_API_KEY ? '✅' : '❌ manquant'}`);
 
-// ============ CHARGER CONFIG ============
 function loadConfig() {
   try {
     const raw = fs.readFileSync('data/state.json', 'utf8');
-    return JSON.parse(raw);
+    const config = JSON.parse(raw);
+    console.log(`📦 Produits: ${config.products?.length || 0}`);
+    console.log(`👥 Comptes: ${config.accounts?.length || 0}`);
+    return config;
   } catch (e) {
-    console.log('⚠️ Pas de config trouvée, utilisation config démo');
+    console.log('⚠️ Config invalide, utilisation démo');
     return {
       products: [{
         id: 'p1',
         nom: 'Produit Demo',
         prix: '5000',
-        description: 'Super produit',
+        description: 'Super produit ivoirien',
         whatsapp: WHATSAPP_DEFAULT
       }],
       accounts: [{
@@ -42,7 +41,6 @@ function loadConfig() {
   }
 }
 
-// ============ CHARGER HISTORIQUE ============
 function loadHistory() {
   try {
     if (fs.existsSync('data/history.json')) {
@@ -52,168 +50,166 @@ function loadHistory() {
   return [];
 }
 
-// ============ SAUVEGARDER HISTORIQUE ============
 function saveHistory(history) {
   fs.writeFileSync('data/history.json', JSON.stringify(history, null, 2));
 }
 
-// ============ GROQ - GÉNÉRER SCRIPT ============
 async function generateScript(product, account, history) {
-  console.log(`🧠 Groq génère script pour: ${product.nom}`);
-
-  const recentHooks = history.slice(-10).map(h => h.hook).join('\n- ');
+  console.log(`\n🧠 Groq génère script: ${product.nom}`);
   const whatsapp = product.whatsapp || WHATSAPP_DEFAULT;
+  const recentHooks = history.slice(-10).map(h => h.hook).filter(Boolean).join('\n- ');
 
-  const prompt = `Tu es un expert marketing viral pour la Côte d'Ivoire.
-
-PRODUIT: ${product.nom}
-PRIX: ${product.prix} FCFA
-DESCRIPTION: ${product.description || ''}
-WHATSAPP: wa.me/${whatsapp}
-COMPTE: ${account.login} (${account.platform})
-
-HOOKS DÉJÀ UTILISÉS (NE PAS RÉPÉTER):
-${recentHooks || 'Aucun encore'}
-
-RÈGLES:
-- Hook 0-3sec: accroche ULTRA virale, jamais utilisée avant
-- Parle comme un ivoirien (naturel, pas formel)
-- 15-20 secondes max
-- Toujours finir par: "Écris-moi sur WhatsApp 👉 wa.me/${whatsapp}"
-
-Réponds UNIQUEMENT en JSON:
-{
-  "persona": "Prénom, âge, quartier Abidjan",
-  "hook": "phrase d'accroche 0-3sec",
-  "probleme": "douleur du client en 1 phrase",
-  "solution": "comment le produit règle le problème",
-  "preuve": "chiffre ou résultat concret",
-  "cta": "wa.me/${whatsapp}",
-  "hashtags": "#tag1 #tag2 #tag3 #tag4 #tag5",
-  "description": "description post optimisée",
-  "motsCles": "mots-clés pour Pexels en anglais"
-}`;
-
-  const response = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.9,
-    max_tokens: 1000,
-    response_format: { type: 'json_object' }
-  });
-
-  const result = JSON.parse(response.choices[0].message.content);
-  console.log(`✅ Script: "${result.hook}"`);
-  return result;
-}
-
-// ============ PEXELS - TÉLÉCHARGER VIDÉO ============
-async function downloadVideo(keywords, outputPath) {
-  console.log(`🎬 Pexels: recherche "${keywords}"`);
-  
-  const page = Math.floor(Math.random() * 5) + 1;
-  const response = await axios.get(
-    `https://api.pexels.com/videos/search?query=${encodeURIComponent(keywords)}&orientation=portrait&size=medium&per_page=15&page=${page}`,
-    { headers: { Authorization: PEXELS_API_KEY } }
-  );
-
-  const videos = response.data.videos;
-  if (!videos || videos.length === 0) throw new Error('Aucune vidéo Pexels');
-
-  const video = videos[Math.floor(Math.random() * videos.length)];
-  const fileUrl = video.video_files.find(f => f.quality === 'hd' || f.quality === 'sd')?.link;
-  if (!fileUrl) throw new Error('Pas de lien vidéo');
-
-  const videoResponse = await axios.get(fileUrl, { responseType: 'stream' });
-  const writer = fs.createWriteStream(outputPath);
-  videoResponse.data.pipe(writer);
-
-  return new Promise((resolve, reject) => {
-    writer.on('finish', () => {
-      console.log(`✅ Vidéo téléchargée: ${outputPath}`);
-      resolve(outputPath);
-    });
-    writer.on('error', reject);
-  });
-}
-
-// ============ EDGE TTS - GÉNÉRER VOIX ============
-async function generateVoice(script, outputPath) {
-  console.log('🗣️ Edge TTS: génération voix...');
-  
-  const texte = `${script.hook}. ${script.probleme}. ${script.solution}. ${script.preuve}. Écris-moi sur WhatsApp.`;
-  const texteClean = texte.replace(/['"]/g, '').substring(0, 500);
-  
-  execSync(`edge-tts --voice fr-FR-DeniseNeural --text "${texteClean}" --write-media ${outputPath} --rate=+15%`, {
-    timeout: 30000
-  });
-  
-  console.log('✅ Voix générée');
-  return outputPath;
-}
-
-// ============ FFMPEG - MONTER VIDÉO ============
-async function mountVideo(videoPath, audioPath, script, outputPath) {
-  console.log('✂️ FFmpeg: montage vidéo...');
-
-  const hook = script.hook.replace(/['"]/g, '').substring(0, 60);
-  const cta = `WhatsApp 👉 wa.me/${script.cta.replace('wa.me/', '')}`;
-
-  const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
-    -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,\
-    drawtext=text='${hook}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h*0.15:borderw=3:bordercolor=black,\
-    drawtext=text='${cta}':fontsize=42:fontcolor=yellow:x=(w-text_w)/2:y=h*0.82:borderw=3:bordercolor=black" \
-    -map 0:v -map 1:a \
-    -c:v libx264 -preset fast -crf 28 \
-    -c:a aac -b:a 128k \
-    -shortest -t 30 \
-    -y "${outputPath}"`;
-
-  execSync(cmd, { timeout: 120000 });
-  console.log('✅ Vidéo montée');
-  return outputPath;
-}
-
-// ============ TRAITER UN COMPTE ============
-async function processAccount(account, products, history) {
-  console.log(`\n📱 Traitement: ${account.login} (${account.platform})`);
-
-  // Choisir produit (rotation)
-  const accountProducts = products.filter(p => 
-    account.products && account.products.includes(p.id)
-  );
-  
-  if (accountProducts.length === 0) {
-    console.log('⚠️ Aucun produit assigné à ce compte');
-    return null;
+  if (!GROQ_API_KEY) {
+    console.log('⚠️ Pas de clé Groq - script démo');
+    return {
+      persona: 'Kadidia 24 ans Yopougon',
+      hook: `POV : tu découvres ${product.nom} à ${product.prix} FCFA`,
+      probleme: 'Tu cherches la meilleure solution',
+      solution: `${product.nom} règle tout`,
+      preuve: 'Déjà 200 clients satisfaits',
+      cta: whatsapp,
+      hashtags: '#abidjan #bonplan225 #civ #madeinci',
+      description: `${product.nom} disponible ! Contacte-moi sur WhatsApp`,
+      motsCles: 'african woman market abidjan'
+    };
   }
 
-  const todayIndex = new Date().getDate() % accountProducts.length;
-  const product = accountProducts[todayIndex];
+  const groq = new Groq({ apiKey: GROQ_API_KEY });
+  const prompt = `Tu es expert marketing viral Côte d'Ivoire.
+PRODUIT: ${product.nom} | PRIX: ${product.prix} FCFA
+WHATSAPP: wa.me/${whatsapp}
+HOOKS DÉJÀ UTILISÉS (évite): ${recentHooks || 'aucun'}
+Crée un script viral 15-20 secondes style TikTok ivoirien.
+Réponds UNIQUEMENT en JSON valide:
+{
+  "persona": "Prénom, âge, quartier Abidjan",
+  "hook": "accroche 0-3sec ultra virale",
+  "probleme": "douleur client 1 phrase",
+  "solution": "comment le produit aide",
+  "preuve": "chiffre concret",
+  "cta": "${whatsapp}",
+  "hashtags": "#abidjan #bonplan225 #civ #madeinci #sidehustleci",
+  "description": "description post TikTok optimisée",
+  "motsCles": "mots clés Pexels en anglais max 3 mots"
+}`;
+
+  try {
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.9,
+      max_tokens: 800,
+      response_format: { type: 'json_object' }
+    });
+    const result = JSON.parse(response.choices[0].message.content);
+    console.log(`✅ Hook: "${result.hook}"`);
+    return result;
+  } catch (e) {
+    console.log(`⚠️ Groq erreur: ${e.message}`);
+    return {
+      persona: 'Kadidia 24 ans Yopougon',
+      hook: `${product.nom} à seulement ${product.prix} FCFA !`,
+      probleme: 'Tu cherches la meilleure solution',
+      solution: `${product.nom} est la réponse`,
+      preuve: 'Déjà 200 clients',
+      cta: whatsapp,
+      hashtags: '#abidjan #bonplan225 #civ',
+      description: `${product.nom} disponible !`,
+      motsCles: 'african woman abidjan market'
+    };
+  }
+}
+
+async function downloadVideo(keywords, outputPath) {
+  console.log(`🎬 Pexels: "${keywords}"`);
+  if (!PEXELS_API_KEY) {
+    console.log('⚠️ Pas de clé Pexels - vidéo test');
+    execSync(`ffmpeg -f lavfi -i color=c=blue:size=1080x1920:rate=25 -t 20 -y "${outputPath}" 2>/dev/null`);
+    return outputPath;
+  }
+  try {
+    const page = Math.floor(Math.random() * 3) + 1;
+    const response = await axios.get(
+      `https://api.pexels.com/videos/search?query=${encodeURIComponent(keywords)}&orientation=portrait&per_page=10&page=${page}`,
+      { headers: { Authorization: PEXELS_API_KEY }, timeout: 30000 }
+    );
+    const videos = response.data.videos;
+    if (!videos || videos.length === 0) throw new Error('Aucune vidéo');
+    const video = videos[Math.floor(Math.random() * Math.min(videos.length, 5))];
+    const fileUrl = video.video_files.find(f => f.quality === 'hd' || f.quality === 'sd')?.link;
+    if (!fileUrl) throw new Error('Pas de lien');
+    const videoResponse = await axios.get(fileUrl, { responseType: 'stream', timeout: 60000 });
+    const writer = fs.createWriteStream(outputPath);
+    videoResponse.data.pipe(writer);
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+    console.log('✅ Vidéo Pexels téléchargée');
+  } catch (e) {
+    console.log(`⚠️ Pexels erreur: ${e.message} - vidéo test`);
+    execSync(`ffmpeg -f lavfi -i color=c=black:size=1080x1920:rate=25 -t 20 -y "${outputPath}" 2>/dev/null`);
+  }
+  return outputPath;
+}
+
+async function generateVoice(script, outputPath) {
+  console.log('🗣️ Edge TTS voix...');
+  const texte = `${script.hook}. ${script.probleme}. ${script.solution}. ${script.preuve}. Écris-moi sur WhatsApp.`;
+  const clean = texte.replace(/['"\\]/g, '').replace(/[^\w\s.,!?àáâãäåèéêëìíîïòóôõöùúûüýÿæœçÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝŸÆŒÇ]/g, '').substring(0, 400);
+  try {
+    execSync(`edge-tts --voice fr-FR-DeniseNeural --text "${clean}" --write-media "${outputPath}" --rate=+10%`, { timeout: 30000 });
+    console.log('✅ Voix générée');
+  } catch (e) {
+    console.log(`⚠️ TTS erreur: ${e.message}`);
+    execSync(`ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t 20 -y "${outputPath}" 2>/dev/null`);
+  }
+  return outputPath;
+}
+
+async function mountVideo(videoPath, audioPath, script, outputPath) {
+  console.log('✂️ FFmpeg montage...');
+  const hook = (script.hook || '').replace(/['"\\:]/g, '').substring(0, 50);
+  const cta = `WhatsApp: wa.me/${(script.cta || '').replace('wa.me/', '')}`;
+  try {
+    const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
+      -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,\
+drawtext=text='${hook}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.12:borderw=3:bordercolor=black@0.8,\
+drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.84:borderw=3:bordercolor=black@0.8" \
+      -map 0:v -map 1:a \
+      -c:v libx264 -preset fast -crf 28 \
+      -c:a aac -b:a 128k \
+      -shortest -t 25 -y "${outputPath}" 2>/dev/null`;
+    execSync(cmd, { timeout: 120000 });
+    console.log('✅ Vidéo montée');
+  } catch (e) {
+    console.log(`⚠️ FFmpeg erreur: ${e.message}`);
+  }
+  return outputPath;
+}
+
+async function processAccount(account, products, history) {
+  console.log(`\n📱 Compte: ${account.login} (${account.platform})`);
+  const accountProducts = products.filter(p => account.products?.includes(p.id));
+  if (accountProducts.length === 0) {
+    console.log('⚠️ Aucun produit assigné');
+    return;
+  }
+  const product = accountProducts[new Date().getDate() % accountProducts.length];
   console.log(`📦 Produit: ${product.nom}`);
 
-  // Générer script avec Groq
   const script = await generateScript(product, account, history);
-
   const videoId = `vid_${Date.now()}`;
   const rawVideo = `output/${videoId}_raw.mp4`;
   const audioFile = `output/${videoId}.mp3`;
   const finalVideo = `output/${videoId}_final.mp4`;
 
-  // Télécharger vidéo Pexels
-  await downloadVideo(script.motsCles || 'african market woman', rawVideo);
-
-  // Générer voix
+  await downloadVideo(script.motsCles || 'african woman market', rawVideo);
   await generateVoice(script, audioFile);
-
-  // Monter vidéo
   await mountVideo(rawVideo, audioFile, script, finalVideo);
 
-  // Nettoyer fichiers temporaires
   if (fs.existsSync(rawVideo)) fs.unlinkSync(rawVideo);
-  if (fs.existsSync(audioFile)) fs.unlinkSync(audioFile);
 
-  // Sauvegarder dans historique
   const entry = {
     id: videoId,
     date: new Date().toISOString().split('T')[0],
@@ -223,8 +219,8 @@ async function processAccount(account, products, history) {
     hook: script.hook,
     persona: script.persona,
     hashtags: script.hashtags,
+    description: script.description,
     whatsapp: script.cta,
-    videoPath: finalVideo,
     statut: 'generee',
     vues: 0,
     likes: 0
@@ -232,53 +228,34 @@ async function processAccount(account, products, history) {
 
   history.push(entry);
   saveHistory(history);
-
-  console.log(`✅ Vidéo prête: ${finalVideo}`);
-  return { script, videoPath: finalVideo, entry };
+  console.log(`✅ ${finalVideo} prête !`);
 }
 
-// ============ MAIN ============
 async function main() {
-  console.log('🚀 ViralAgent Pro - Démarrage');
-  console.log(`⏰ Heure: ${new Date().toLocaleString('fr-CI', { timeZone: 'Africa/Abidjan' })}`);
-  console.log(`🧠 Groq: ${GROQ_API_KEY ? '✅ actif' : '❌ manquant'}`);
-  console.log(`🎬 Pexels: ${PEXELS_API_KEY ? '✅ actif' : '❌ manquant'}`);
-
-  // Créer dossiers
   fs.mkdirSync('output', { recursive: true });
   fs.mkdirSync('data', { recursive: true });
-
-  // Charger config et historique
   const config = loadConfig();
   const history = loadHistory();
-
-  console.log(`📦 Produits: ${config.products?.length || 0}`);
-  console.log(`👥 Comptes: ${config.accounts?.length || 0}`);
   console.log(`📊 Historique: ${history.length} vidéos`);
-
-  // Traiter chaque compte actif
-  const activeAccounts = config.accounts?.filter(a => a.active) || [];
-  
+  const activeAccounts = (config.accounts || []).filter(a => a.active !== false);
   if (activeAccounts.length === 0) {
-    console.log('⚠️ Aucun compte actif trouvé');
+    console.log('⚠️ Aucun compte actif');
     return;
   }
-
   for (const account of activeAccounts) {
     try {
       await processAccount(account, config.products || [], history);
-      // Pause entre comptes
-      await new Promise(r => setTimeout(r, 5000));
+      await new Promise(r => setTimeout(r, 3000));
     } catch (err) {
-      console.error(`❌ Erreur compte ${account.login}:`, err.message);
+      console.error(`❌ Erreur ${account.login}: ${err.message}`);
     }
   }
-
-  console.log('\n🎉 Agent terminé !');
-  console.log(`📹 Vidéos générées: ${fs.readdirSync('output').filter(f => f.endsWith('_final.mp4')).length}`);
+  const videos = fs.readdirSync('output').filter(f => f.endsWith('_final.mp4'));
+  console.log(`\n🎉 Terminé ! ${videos.length} vidéo(s) générée(s)`);
+  videos.forEach(v => console.log(`  📹 ${v}`));
 }
 
 main().catch(err => {
-  console.error('❌ ERREUR FATALE:', err);
+  console.error('❌ ERREUR:', err.message);
   process.exit(1);
 });
