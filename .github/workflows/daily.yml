@@ -14,62 +14,48 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: 📥 Télécharger le code
+      - name: Telecharger code
         uses: actions/checkout@v4
 
-      - name: ⚙️ Installer Node.js 24
+      - name: Installer Node 24
         uses: actions/setup-node@v4
         with:
           node-version: '24'
 
-      - name: 🎬 Installer FFmpeg
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
-          ffmpeg -version | head -1
+      - name: Installer FFmpeg
+        run: sudo apt-get install -y ffmpeg
 
-      - name: 🗣️ Installer Edge TTS
-        run: |
-          pip install edge-tts
-          edge-tts --version
+      - name: Installer Edge TTS
+        run: pip install edge-tts
 
-      - name: 📦 Installer dépendances Node
-        run: |
-          npm install
-          echo "✅ Dépendances installées"
+      - name: Installer dependances
+        run: npm install
 
-      - name: 🌐 Installer Playwright
-        run: |
-          npx playwright install chromium --with-deps
-          echo "✅ Playwright prêt"
+      - name: Installer Playwright
+        run: npx playwright install chromium --with-deps
 
-      - name: 📋 Préparer configuration
+      - name: Preparer config
+        env:
+          CONFIG_DATA: ${{ secrets.CONFIG }}
         run: |
           mkdir -p data output
-          echo '${{ secrets.CONFIG }}' > data/state.json
-          echo "✅ Config chargée"
+          echo "$CONFIG_DATA" > data/state.json
+          echo "Config chargée"
+          cat data/state.json | head -5
 
-      - name: 🤖 Lancer Agent Viral
+      - name: Lancer Agent
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           WHATSAPP_DEFAULT: ${{ secrets.WHATSAPP_DEFAULT }}
-          NODE_ENV: production
           TZ: Africa/Abidjan
-        run: |
-          node server.js
-          echo "✅ Agent terminé"
+          SKIP_PUBLISH: "true"
+        run: node server.js
 
-      - name: 📊 Sauvegarder historique
+      - name: Sauvegarder video
         if: always()
-        run: |
-          if [ -f data/history.json ]; then
-            echo "📊 Historique:"
-            cat data/history.json
-          fi
-
-      - name: 🎬 Vérifier vidéos créées
-        if: always()
-        run: |
-          echo "📁 Fichiers générés:"
-          ls -la output/ 2>/dev/null || echo "Pas de vidéos"
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-du-jour
+          path: output/
+          retention-days: 7
