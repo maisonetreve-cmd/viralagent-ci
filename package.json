@@ -1,18 +1,11 @@
 {
   "name": "viralagent-ci",
   "version": "1.0.0",
-  "description": "Agent viral autonome CI",
   "main": "server.js",
   "type": "commonjs",
-  "scripts": {
-    "start": "node server.js"
-  },
   "dependencies": {
-    "@groq-sdk/node": "^0.1.0",
-    "groq-sdk": "^0.3.0",
+    "groq-sdk": "^0.9.0",
     "axios": "^1.6.0",
-    "node-cron": "^3.0.3",
-    "playwright": "^1.40.0",
     "dotenv": "^16.3.1"
   }
 }
