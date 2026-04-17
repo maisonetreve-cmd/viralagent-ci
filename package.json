@@ -1,5 +1,5 @@
 {
-  "name": "viralagent-backend",
+  "name": "viralagent-ci",
   "version": "1.0.0",
   "description": "Agent viral autonome CI",
   "main": "server.js",
