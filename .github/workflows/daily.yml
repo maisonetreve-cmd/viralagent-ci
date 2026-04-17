@@ -31,17 +31,15 @@ jobs:
       - name: Installer dependances
         run: npm install
 
-      - name: Installer Playwright
-        run: npx playwright install chromium --with-deps
-
       - name: Preparer config
         env:
           CONFIG_DATA: ${{ secrets.CONFIG }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
           mkdir -p data output
           echo "$CONFIG_DATA" > data/state.json
-          echo "Config chargée"
-          cat data/state.json | head -5
+          echo "✅ Config OK"
 
       - name: Lancer Agent
         env:
