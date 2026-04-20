@@ -27,7 +27,7 @@ function detectProvider() {
   if (LLM_KEY.startsWith('gsk_')) return 'groq';
   if (LLM_KEY.startsWith('xai-')) return 'grok';
   if (LLM_KEY.startsWith('AIza')) return 'gemini';
-  return 'groq'; // defaut = groq gratuit
+  return 'groq';
 }
 
 function getLLMKey() {
@@ -138,7 +138,6 @@ function loadConfig() {
 
 // Normaliser la config (supporte les 2 formats)
 function normalizeConfig(config) {
-  // Si c'est le format de l'app React (avec "produits" au lieu de "products")
   if (config.produits && !config.products) {
     config.products = config.produits.map((p, i) => ({
       id: p.id || `p${i + 1}`,
@@ -163,7 +162,6 @@ function normalizeConfig(config) {
     }));
   }
 
-  // Remplir products des accounts via linkedAccounts des produits
   if (config.products && config.accounts) {
     config.accounts.forEach(acc => {
       if (!acc.products || acc.products.length === 0) {
@@ -374,22 +372,46 @@ function generateVoice(script, outputPath) {
   return outputPath;
 }
 
-// ============ FFMPEG - MONTER VIDEO ============
+// ============ FFMPEG - MONTER VIDEO (VERSION CORRIGÉE) ============
 function mountVideo(videoPath, audioPath, script, outputPath) {
   console.log('✂️ FFmpeg: montage video...');
 
-  const hook = (script.hook || '').replace(/['"\\:]/g, '').substring(0, 60);
-  const whatsapp = (script.cta || '').replace('wa.me/', '');
-  const cta = `WhatsApp wa.me/${whatsapp}`;
+  // Fonction pour couper le texte en lignes de max 35 caractères
+  const splitTextIntoLines = (text, maxChars = 35) => {
+    const words = text.split(' ');
+    const lines = [];
+    let currentLine = '';
+    for (const word of words) {
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      if (testLine.length <= maxChars) {
+        currentLine = testLine;
+      } else {
+        if (currentLine) lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+    return lines.slice(0, 2);
+  };
 
+  // Nettoyer et formater le hook
+  const hookRaw = (script.hook || 'Offre Speciale').replace(/['"\\:]/g, '');
+  const hookLines = splitTextIntoLines(hookRaw, 35);
+  const hook = hookLines.join('\\n');
+
+  // Nettoyer le CTA - juste le numéro
+  const whatsapp = (script.cta || WHATSAPP_DEFAULT).replace('wa.me/', '').replace(/[^0-9]/g, '');
+  const cta = `📲 WhatsApp : ${whatsapp}`;
+
+  // Police épaisse + ombre portée + zone protégée TikTok
   const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
     -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,\
-drawtext=text='${hook}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.15:borderw=3:bordercolor=black,\
-drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.82:borderw=3:bordercolor=black" \
+drawtext=text='${hook}':fontsize=50:fontcolor=white:x=(w-text_w)/2:y=h*0.10:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,\
+drawtext=text='${cta}':fontsize=40:fontcolor=yellow:x=(w-text_w)/2:y=h*0.90:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" \
     -map 0:v -map 1:a \
-    -c:v libx264 -preset fast -crf 28 \
+    -c:v libx264 -preset fast -crf 26 \
     -c:a aac -b:a 128k \
-    -shortest -t 30 \
+    -shortest -t 25 \
     -y "${outputPath}"`;
 
   try {
@@ -398,7 +420,7 @@ drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.82:bord
   } catch (e) {
     console.log('⚠️ Montage avec texte echoue, montage simple...');
     execSync(
-      `ffmpeg -i "${videoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -t 30 -y "${outputPath}"`,
+      `ffmpeg -i "${videoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v libx264 -preset fast -crf 26 -c:a aac -shortest -t 25 -y "${outputPath}"`,
       { timeout: 120000, stdio: 'pipe' }
     );
   }
@@ -429,7 +451,6 @@ async function uploadVideoToTmpHost(videoPath) {
   const videoData = fs.readFileSync(videoPath);
   const boundary = '----BufferUpload' + Date.now();
 
-  // Essayer plusieurs services d'upload temporaire
   const hosts = [
     { hostname: 'file.io', path: '/', fieldName: 'file' },
     { hostname: '0x0.st', path: '/', fieldName: 'file' },
@@ -461,13 +482,11 @@ async function uploadVideoToTmpHost(videoPath) {
           let data = '';
           res.on('data', chunk => data += chunk);
           res.on('end', () => {
-            // file.io renvoie du JSON
             try {
               const json = JSON.parse(data);
               if (json.link) { resolve(json.link); return; }
               if (json.data && json.data.url) { resolve(json.data.url); return; }
             } catch (e) {}
-            // 0x0.st renvoie une URL directe
             const trimmed = data.trim();
             if (trimmed.startsWith('http')) {
               resolve(trimmed);
@@ -503,13 +522,11 @@ async function publishViaBuffer(videoPath, account, script) {
 
   console.log(`📤 Buffer: publication sur ${account.platform} (${account.login})...`);
 
-  // 1. Recuperer les profils Buffer
   const profiles = await getBufferProfiles();
   if (profiles.length === 0) {
     return { success: false, error: 'Aucun profil Buffer trouve' };
   }
 
-  // 2. Trouver le bon profil (par plateforme et login)
   const platformMap = {
     'tiktok': 'tiktok',
     'instagram': 'instagram'
@@ -522,7 +539,6 @@ async function publishViaBuffer(videoPath, account, script) {
     (p.formatted_username || '').replace('@', '').toLowerCase() === targetLogin
   );
 
-  // Si pas de match exact, prendre le premier profil de la bonne plateforme
   if (!profile) {
     profile = profiles.find(p => p.service === targetPlatform);
   }
@@ -535,14 +551,11 @@ async function publishViaBuffer(videoPath, account, script) {
 
   console.log(`✅ Buffer profil: ${profile.formatted_username} (${profile.service}) - ID: ${profile.id}`);
 
-  // 3. Upload video vers hebergement temporaire
   const videoUrl = await uploadVideoToTmpHost(videoPath);
 
-  // 4. Construire la caption
   const whatsapp = script.cta || WHATSAPP_DEFAULT;
   const caption = `${script.hook}\n\n${script.description || ''}\n\n${script.hashtags || ''}\n\nInteresse ? Contacte-moi sur WhatsApp 👉 wa.me/${whatsapp.replace('wa.me/', '')}`;
 
-  // 5. Creer le post via Buffer API
   const postBody = new URLSearchParams();
   postBody.append('access_token', BUFFER_API_KEY);
   postBody.append('profile_ids[]', profile.id);
@@ -553,7 +566,6 @@ async function publishViaBuffer(videoPath, account, script) {
     postBody.append('media[video]', videoUrl);
     postBody.append('media[thumbnail]', videoUrl);
   } else {
-    // Si pas de video URL, poster juste le texte avec lien
     console.log('⚠️ Pas de video URL, publication texte uniquement');
   }
 
@@ -588,39 +600,31 @@ async function publishViaUploadPost(videoPath, account, script) {
 
   console.log(`📤 Upload-Post: publication sur ${platform} (${account.login})...`);
 
-  // Lire le fichier video en binaire
   const videoData = fs.readFileSync(videoPath);
   const boundary = '----ViralAgent' + Date.now();
 
-  // Construire le body multipart
   let body = '';
   
-  // user
   body += `--${boundary}\r\n`;
   body += `Content-Disposition: form-data; name="user"\r\n\r\n`;
   body += `${account.login.replace('@', '')}\r\n`;
 
-  // platform
   body += `--${boundary}\r\n`;
   body += `Content-Disposition: form-data; name="platform[]"\r\n\r\n`;
   body += `${platform}\r\n`;
 
-  // title (caption)
   body += `--${boundary}\r\n`;
   body += `Content-Disposition: form-data; name="title"\r\n\r\n`;
   body += `${caption.substring(0, 2200)}\r\n`;
 
-  // timezone
   body += `--${boundary}\r\n`;
   body += `Content-Disposition: form-data; name="timezone"\r\n\r\n`;
   body += `${TZ}\r\n`;
 
-  // async upload
   body += `--${boundary}\r\n`;
   body += `Content-Disposition: form-data; name="async_upload"\r\n\r\n`;
   body += `true\r\n`;
 
-  // Fermer la partie texte, ajouter le fichier video
   const preFileBuffer = Buffer.from(body, 'utf8');
   const fileHeader = Buffer.from(
     `--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`,
@@ -680,13 +684,11 @@ async function publishViaUploadPost(videoPath, account, script) {
 async function processAccount(account, products, history) {
   console.log(`\n📱 Traitement: ${account.login} (${account.platform})`);
 
-  // Choisir produit (rotation)
   let accountProducts = products.filter(p =>
     (account.products && account.products.includes(p.id)) ||
     (p.linkedAccounts && p.linkedAccounts.includes(account.id))
   );
 
-  // Si aucun produit assigne, prendre tous les produits actifs
   if (accountProducts.length === 0) {
     accountProducts = products.filter(p => p.active !== false);
   }
@@ -696,7 +698,6 @@ async function processAccount(account, products, history) {
     return null;
   }
 
-  // Anti-doublon: verifier si deja genere aujourd'hui pour ce compte
   const today = new Date().toISOString().split('T')[0];
   const alreadyDone = history.find(h => h.date === today && h.compte === account.login);
   if (alreadyDone) {
@@ -708,7 +709,6 @@ async function processAccount(account, products, history) {
   const product = accountProducts[todayIndex];
   console.log(`📦 Produit: ${product.nom} (${product.prix} FCFA)`);
 
-  // Generer script avec LLM
   const script = await generateScript(product, account, history);
 
   const videoId = `vid_${Date.now()}`;
@@ -716,39 +716,30 @@ async function processAccount(account, products, history) {
   const audioFile = `output/${videoId}.mp3`;
   const finalVideo = `output/${videoId}_final.mp4`;
 
-  // Telecharger video Pexels
   await downloadPexelsVideo(script.motsCles || 'african market woman', rawVideo);
 
-  // Generer voix
   generateVoice(script, audioFile);
 
-  // Monter video
   mountVideo(rawVideo, audioFile, script, finalVideo);
 
-  // Archiver
   const archiveDir = 'output/archive';
   fs.mkdirSync(archiveDir, { recursive: true });
   const archiveName = `video-${today}-${product.nom.replace(/[^a-zA-Z0-9]/g, '_')}-${account.login.replace('@', '')}.mp4`;
   fs.copyFileSync(finalVideo, path.join(archiveDir, archiveName));
 
-  // Nettoyer fichiers temporaires
   try { if (fs.existsSync(rawVideo)) fs.unlinkSync(rawVideo); } catch (e) {}
   try { if (fs.existsSync(audioFile)) fs.unlinkSync(audioFile); } catch (e) {}
 
-  // ===== PUBLICATION AUTOMATIQUE =====
   let publishResult = { success: false, error: 'Non tente' };
 
-  // Priorite 1: Buffer (gratuit, stable)
   if (BUFFER_API_KEY) {
     console.log('📤 Publication via Buffer...');
     publishResult = await publishViaBuffer(finalVideo, account, script);
   }
-  // Priorite 2: Upload-Post (si Buffer non configure)
   else if (UPLOADPOST_API_KEY) {
     console.log('📤 Publication via Upload-Post...');
     publishResult = await publishViaUploadPost(finalVideo, account, script);
   }
-  // Aucun service de publication
   else {
     console.log('⚠️ Aucun service de publication configure');
     console.log('   → BUFFER_API_KEY (recommande, gratuit): publish.buffer.com/settings/api');
@@ -756,7 +747,6 @@ async function processAccount(account, products, history) {
     console.log('   → Video generee mais non publiee automatiquement');
   }
 
-  // Sauvegarder dans historique
   const entry = {
     id: videoId,
     date: today,
@@ -804,7 +794,6 @@ function printSummary(results) {
     }
   });
 
-  // Lister les fichiers generes
   if (fs.existsSync('output')) {
     const files = fs.readdirSync('output').filter(f => f.endsWith('_final.mp4'));
     console.log(`\n📁 Fichiers prets a publier:`);
@@ -824,12 +813,10 @@ async function main() {
   console.log(`📤 Upload-Post: ${UPLOADPOST_API_KEY ? '✅ actif (backup)' : '⚠️ non configure'}`);
   console.log(`📱 WhatsApp default: wa.me/${WHATSAPP_DEFAULT}`);
 
-  // Creer dossiers
   fs.mkdirSync('output', { recursive: true });
   fs.mkdirSync('output/archive', { recursive: true });
   fs.mkdirSync('data', { recursive: true });
 
-  // Charger config et historique
   const config = loadConfig();
   const history = loadHistory();
 
@@ -845,7 +832,6 @@ async function main() {
 
   console.log(`📊 Historique: ${history.length} videos`);
 
-  // Traiter chaque compte actif
   const activeAccounts = (config.accounts || []).filter(a => a.active !== false);
 
   if (activeAccounts.length === 0) {
@@ -860,7 +846,6 @@ async function main() {
     try {
       const result = await processAccount(account, config.products || [], history);
       results.push(result);
-      // Pause entre comptes
       if (activeAccounts.indexOf(account) < activeAccounts.length - 1) {
         console.log('⏳ Pause 5 secondes...');
         await new Promise(r => setTimeout(r, 5000));
