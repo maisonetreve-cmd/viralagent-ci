@@ -215,16 +215,18 @@ COMPTE: ${account.login} (${account.platform})
 HOOKS DEJA UTILISES (NE PAS REPETER):
 ${recentHooks || 'Aucun encore'}
 
-REGLES:
-- Hook 0-3sec: accroche ULTRA virale, jamais utilisee avant
-- Parle comme un ivoirien (naturel, pas formel)
-- 15-20 secondes max
+REGLES IMPORTANTES:
+- Hook 0-3sec: accroche ULTRA virale, JAMAIS utilisee avant
+- Parle comme un Ivoirien (naturel, pas formel)
+- 15-20 secondes maximum
+- CORRIGE L'ORTHOGRAPHE : écris correctement (ex: "sur les" pas "surnles")
 - Toujours finir par: "Ecris-moi sur WhatsApp wa.me/${whatsapp}"
+- Hook maximum 35 caracteres pour affichage video
 
 Reponds UNIQUEMENT en JSON valide:
 {
   "persona": "Prenom, age, quartier Abidjan",
-  "hook": "phrase d'accroche 0-3sec",
+  "hook": "phrase d'accroche 0-3sec (orthographe correcte, max 35 caracteres)",
   "probleme": "douleur du client en 1 phrase",
   "solution": "comment le produit regle le probleme",
   "preuve": "chiffre ou resultat concret",
@@ -372,14 +374,18 @@ function generateVoice(script, outputPath) {
   return outputPath;
 }
 
-// ============ FFMPEG - MONTER VIDEO ============
+// ============ FFMPEG - MONTER VIDEO (VERSION CORRIGÉE) ============
 function mountVideo(videoPath, audioPath, script, outputPath) {
   console.log('✂️ FFmpeg: montage video...');
 
-  const splitTextIntoLines = (text, maxChars = 35) => {
-    const words = text.split(' ');
+  // Fonction pour couper le texte en lignes de max 32 caractères (avec espaces préservés)
+  const splitTextIntoLines = (text, maxChars = 32) => {
+    // Nettoyer le texte : supprimer les doubles espaces, garder les accents
+    const cleanText = text.replace(/\s+/g, ' ').trim();
+    const words = cleanText.split(' ');
     const lines = [];
     let currentLine = '';
+    
     for (const word of words) {
       const testLine = currentLine ? `${currentLine} ${word}` : word;
       if (testLine.length <= maxChars) {
@@ -390,20 +396,34 @@ function mountVideo(videoPath, audioPath, script, outputPath) {
       }
     }
     if (currentLine) lines.push(currentLine);
-    return lines.slice(0, 2);
+    return lines.slice(0, 2); // Max 2 lignes
   };
 
-  const hookRaw = (script.hook || 'Offre Speciale').replace(/['"\\:]/g, '');
-  const hookLines = splitTextIntoLines(hookRaw, 35);
+  // Nettoyer et formater le hook (garder espaces et accents)
+  const hookRaw = (script.hook || 'Offre Speciale')
+    .replace(/['"\\]/g, '')  // Supprimer quotes et backslash
+    .replace(/:/g, '')        // Supprimer deux-points
+    .trim();
+  
+  const hookLines = splitTextIntoLines(hookRaw, 32);
   const hook = hookLines.join('\\n');
 
-  const whatsapp = (script.cta || WHATSAPP_DEFAULT).replace('wa.me/', '').replace(/[^0-9]/g, '');
-  const cta = `📲 WhatsApp : ${whatsapp}`;
+  // Nettoyer le CTA - juste le numéro (10 chiffres après 225)
+  const whatsappRaw = (script.cta || WHATSAPP_DEFAULT)
+    .replace('wa.me/', '')
+    .replace(/[^0-9]/g, '');
+  
+  // Formater : 225 + 10 chiffres
+  const whatsapp = whatsappRaw.length > 10 ? whatsappRaw.substring(0, 13) : whatsappRaw;
+  
+  // CTA sans emoji (pas supporté par DejaVu) mais avec texte clair
+  const cta = `WhatsApp : ${whatsapp}`;
 
+  // Police épaisse + ombre portée + zone protégée TikTok + MARGES
   const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
     -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,\
-drawtext=text='${hook}':fontsize=50:fontcolor=white:x=(w-text_w)/2:y=h*0.10:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,\
-drawtext=text='${cta}':fontsize=40:fontcolor=yellow:x=(w-text_w)/2:y=h*0.90:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" \
+drawtext=text='${hook}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.08:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,\
+drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.92:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" \
     -map 0:v -map 1:a \
     -c:v libx264 -preset fast -crf 26 \
     -c:a aac -b:a 128k \
@@ -458,7 +478,6 @@ async function uploadVideoToTmpHost(videoPath) {
   const videoData = fs.readFileSync(videoPath);
   console.log(`📦 Taille video: ${(videoData.length / 1024 / 1024).toFixed(2)} MB`);
 
-  // Essayer plusieurs services d'upload temporaire
   const hosts = [
     { hostname: 'file.io', path: '/', fieldName: 'file' },
     { hostname: '0x0.st', path: '/', fieldName: 'file' },
@@ -535,13 +554,11 @@ async function publishViaBuffer(videoPath, account, script) {
 
   console.log(`\n📤 Buffer: publication sur ${account.platform} (${account.login})...`);
 
-  // 1. Recuperer les profils Buffer
   const profiles = await getBufferProfiles();
   if (profiles.length === 0) {
     return { success: false, error: 'Aucun profil Buffer trouve' };
   }
 
-  // 2. Trouver le bon profil
   const platformMap = {
     'tiktok': 'tiktok',
     'instagram': 'instagram'
@@ -566,20 +583,17 @@ async function publishViaBuffer(videoPath, account, script) {
 
   console.log(`✅ Buffer profil selectionne: ${profile.formatted_username} (${profile.service}) - ID: ${profile.id}`);
 
-  // 3. Upload video
   const videoUrl = await uploadVideoToTmpHost(videoPath);
   
   if (!videoUrl) {
     console.log('⚠️ Upload video echoue, tentative avec lien direct GitHub Actions');
   }
 
-  // 4. Construire la caption
   const whatsapp = (script.cta || WHATSAPP_DEFAULT).replace('wa.me/', '');
   const caption = `${script.hook}\n\n${script.description || ''}\n\n${script.hashtags || ''}\n\n📞 Interesse ? Contacte-moi sur WhatsApp 👉 wa.me/${whatsapp}`;
 
   console.log(`📝 Caption (${caption.length} chars): ${caption.substring(0, 100)}...`);
 
-  // 5. Creer le post via Buffer API v2
   const postBody = {
     text: caption.substring(0, 2200),
     profile_ids: [profile.id],
