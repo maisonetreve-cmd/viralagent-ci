@@ -2,8 +2,12 @@ FROM mcr.microsoft.com/playwright:v1.45.1-jammy
 
 WORKDIR /app
 
-# Install FFmpeg
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install FFmpeg + Polices GRATUITES (DejaVu = libre, inclus dans Linux)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    fonts-dejavu-core \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy package files
 COPY package*.json ./
