@@ -1,6 +1,5 @@
 // ViralAgent Pro - Backend 100% autonome
-// Grok/Groq (LLM) + Pexels + Edge TTS + FFmpeg
-// SANS dependance groq-sdk - utilise fetch direct
+// Grok/Groq (LLM) + Pexels + Edge TTS + FFmpeg + Buffer
 
 const { execSync } = require('child_process');
 const fs = require('fs');
@@ -19,7 +18,6 @@ const BUFFER_API_KEY = process.env.BUFFER_API_KEY || '';
 const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250700000000';
 const TZ = process.env.TZ || 'Africa/Abidjan';
 
-// Detecter le provider LLM
 function detectProvider() {
   if (GROQ_API_KEY.startsWith('gsk_')) return 'groq';
   if (GROK_API_KEY.startsWith('xai-')) return 'grok';
@@ -136,7 +134,6 @@ function loadConfig() {
   };
 }
 
-// Normaliser la config (supporte les 2 formats)
 function normalizeConfig(config) {
   if (config.produits && !config.products) {
     config.products = config.produits.map((p, i) => ({
@@ -374,13 +371,11 @@ function generateVoice(script, outputPath) {
   return outputPath;
 }
 
-// ============ FFMPEG - MONTER VIDEO (VERSION CORRIGÉE) ============
+// ============ FFMPEG - MONTER VIDEO + COMPRESSER ============
 function mountVideo(videoPath, audioPath, script, outputPath) {
   console.log('✂️ FFmpeg: montage video...');
 
-  // Fonction pour couper le texte en lignes de max 32 caractères (avec espaces préservés)
   const splitTextIntoLines = (text, maxChars = 32) => {
-    // Nettoyer le texte : supprimer les doubles espaces, garder les accents
     const cleanText = text.replace(/\s+/g, ' ').trim();
     const words = cleanText.split(' ');
     const lines = [];
@@ -396,47 +391,55 @@ function mountVideo(videoPath, audioPath, script, outputPath) {
       }
     }
     if (currentLine) lines.push(currentLine);
-    return lines.slice(0, 2); // Max 2 lignes
+    return lines.slice(0, 2);
   };
 
-  // Nettoyer et formater le hook (garder espaces et accents)
   const hookRaw = (script.hook || 'Offre Speciale')
-    .replace(/['"\\]/g, '')  // Supprimer quotes et backslash
-    .replace(/:/g, '')        // Supprimer deux-points
+    .replace(/['"\\]/g, '')
+    .replace(/:/g, '')
     .trim();
   
   const hookLines = splitTextIntoLines(hookRaw, 32);
   const hook = hookLines.join('\\n');
 
-  // Nettoyer le CTA - juste le numéro (10 chiffres après 225)
   const whatsappRaw = (script.cta || WHATSAPP_DEFAULT)
     .replace('wa.me/', '')
     .replace(/[^0-9]/g, '');
   
-  // Formater : 225 + 10 chiffres
   const whatsapp = whatsappRaw.length > 10 ? whatsappRaw.substring(0, 13) : whatsappRaw;
-  
-  // CTA sans emoji (pas supporté par DejaVu) mais avec texte clair
   const cta = `WhatsApp : ${whatsapp}`;
 
-  // Police épaisse + ombre portée + zone protégée TikTok + MARGES
+  // Compression pour Buffer (<10MB)
   const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
     -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,\
 drawtext=text='${hook}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.08:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,\
 drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.92:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" \
     -map 0:v -map 1:a \
-    -c:v libx264 -preset fast -crf 26 \
-    -c:a aac -b:a 128k \
-    -shortest -t 25 \
+    -c:v libx264 -preset fast -crf 28 \
+    -c:a aac -b:a 96k \
+    -shortest -t 20 \
     -y "${outputPath}"`;
 
   try {
     execSync(cmd, { timeout: 120000, stdio: 'pipe' });
     console.log('✅ Video montee');
+    
+    // Vérifier taille
+    const stats = fs.statSync(outputPath);
+    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+    console.log(`📦 Taille video: ${sizeMB} MB`);
+    
+    if (stats.size > 10 * 1024 * 1024) {
+      console.log('⚠️ Video trop lourde (>10MB), re-compression...');
+      execSync(
+        `ffmpeg -i "${outputPath}" -c:v libx264 -preset fast -crf 32 -c:a aac -b:a 64k -t 15 -y "${outputPath}"`,
+        { timeout: 120000, stdio: 'pipe' }
+      );
+    }
   } catch (e) {
     console.log('⚠️ Montage avec texte echoue, montage simple...');
     execSync(
-      `ffmpeg -i "${videoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v libx264 -preset fast -crf 26 -c:a aac -shortest -t 25 -y "${outputPath}"`,
+      `ffmpeg -i "${videoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -t 20 -y "${outputPath}"`,
       { timeout: 120000, stdio: 'pipe' }
     );
   }
@@ -444,31 +447,36 @@ drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.92:bord
   return outputPath;
 }
 
-// ============ PUBLIER VIA BUFFER API (CORRIGÉ) ============
+// ============ PUBLIER VIA BUFFER API (VERSION FINALE) ============
 async function getBufferProfiles() {
-  console.log('📋 Buffer: recuperation des profils...');
+  console.log('\n📋 Buffer: recuperation des profils...');
   
   if (!BUFFER_API_KEY) {
     console.log('❌ BUFFER_API_KEY manquante');
     return [];
   }
 
-  const result = await fetchJSON(`https://api.bufferapp.com/1/profiles.json?access_token=${BUFFER_API_KEY}`, {
-    method: 'GET'
-  });
+  const url = `https://api.bufferapp.com/1/profiles.json?access_token=${BUFFER_API_KEY}`;
+  console.log(`🔗 URL Buffer: ${url.substring(0, 80)}...`);
+  
+  const result = await fetchJSON(url, { method: 'GET' });
+
+  console.log(`📥 Buffer reponse: statut ${result.status}`);
 
   if (result.status === 200 && Array.isArray(result.data)) {
     console.log(`✅ Buffer: ${result.data.length} profil(s) trouves`);
-    result.data.forEach(p => console.log(`   → ${p.formatted_username} (${p.service}) - ID: ${p.id}`));
+    result.data.forEach(p => {
+      console.log(`   → ${p.formatted_username} (${p.service}) - ID: ${p.id}`);
+    });
     return result.data;
   } else {
-    console.log(`❌ Buffer profils erreur: ${JSON.stringify(result.data)}`);
+    console.log(`❌ Buffer profils erreur: ${JSON.stringify(result.data).substring(0, 200)}`);
     return [];
   }
 }
 
 async function uploadVideoToTmpHost(videoPath) {
-  console.log('☁️ Upload video vers hebergement temporaire...');
+  console.log('\n☁️ Upload video vers hebergement temporaire...');
 
   if (!fs.existsSync(videoPath)) {
     console.log(`❌ Fichier video inexistant: ${videoPath}`);
@@ -476,12 +484,14 @@ async function uploadVideoToTmpHost(videoPath) {
   }
 
   const videoData = fs.readFileSync(videoPath);
-  console.log(`📦 Taille video: ${(videoData.length / 1024 / 1024).toFixed(2)} MB`);
+  const sizeMB = (videoData.length / 1024 / 1024).toFixed(2);
+  console.log(`📦 Taille video: ${sizeMB} MB`);
 
+  // Service principal: tmpfiles.org (plus fiable pour vidéo)
   const hosts = [
+    { hostname: 'tmpfiles.org', path: '/api/v1/upload', fieldName: 'file' },
     { hostname: 'file.io', path: '/', fieldName: 'file' },
-    { hostname: '0x0.st', path: '/', fieldName: 'file' },
-    { hostname: 'tmpfiles.org', path: '/api/v1/upload', fieldName: 'file' }
+    { hostname: '0x0.st', path: '/', fieldName: 'file' }
   ];
 
   for (const host of hosts) {
@@ -505,21 +515,38 @@ async function uploadVideoToTmpHost(videoPath) {
             'Content-Type': `multipart/form-data; boundary=${boundary}`,
             'Content-Length': fullBody.length
           },
-          timeout: 120000
+          timeout: 180000
         }, (res) => {
           let data = '';
           res.on('data', chunk => data += chunk);
           res.on('end', () => {
-            console.log(`   ${host.hostname} reponse: ${data.substring(0, 200)}`);
+            console.log(`   ${host.hostname} reponse brute: ${data.substring(0, 300)}`);
             try {
               const json = JSON.parse(data);
-              if (json.link) { resolve(json.link); return; }
-              if (json.data && json.data.url) { resolve(json.data.url); return; }
-            } catch (e) {}
+              if (json.link) { 
+                console.log(`   ✅ Lien trouve: ${json.link}`);
+                resolve(json.link); 
+                return; 
+              }
+              if (json.data && json.data.url) { 
+                console.log(`   ✅ Lien trouve: ${json.data.url}`);
+                resolve(json.data.url); 
+                return; 
+              }
+              if (json.url) {
+                console.log(`   ✅ Lien trouve: ${json.url}`);
+                resolve(json.url);
+                return;
+              }
+            } catch (e) {
+              console.log(`   ⚠️ Pas de JSON valide: ${e.message}`);
+            }
             const trimmed = data.trim();
             if (trimmed.startsWith('http')) {
+              console.log(`   ✅ URL directe: ${trimmed}`);
               resolve(trimmed);
             } else {
+              console.log(`   ⚠️ Pas d URL dans la reponse`);
               resolve(null);
             }
           });
@@ -529,13 +556,17 @@ async function uploadVideoToTmpHost(videoPath) {
           console.log(`   ${host.hostname} erreur: ${err.message}`);
           resolve(null);
         });
-        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('timeout', () => { 
+          req.destroy(); 
+          console.log(`   ${host.hostname} timeout`);
+          resolve(null); 
+        });
         req.write(fullBody);
         req.end();
       });
 
       if (url) {
-        console.log(`✅ Video uploadee: ${url}`);
+        console.log(`✅ Video uploadee avec succes: ${url}`);
         return url;
       }
     } catch (e) {
@@ -554,11 +585,13 @@ async function publishViaBuffer(videoPath, account, script) {
 
   console.log(`\n📤 Buffer: publication sur ${account.platform} (${account.login})...`);
 
+  // 1. Récupérer les profils
   const profiles = await getBufferProfiles();
   if (profiles.length === 0) {
     return { success: false, error: 'Aucun profil Buffer trouve' };
   }
 
+  // 2. Trouver le bon profil
   const platformMap = {
     'tiktok': 'tiktok',
     'instagram': 'instagram'
@@ -583,54 +616,54 @@ async function publishViaBuffer(videoPath, account, script) {
 
   console.log(`✅ Buffer profil selectionne: ${profile.formatted_username} (${profile.service}) - ID: ${profile.id}`);
 
+  // 3. Upload video
   const videoUrl = await uploadVideoToTmpHost(videoPath);
   
   if (!videoUrl) {
-    console.log('⚠️ Upload video echoue, tentative avec lien direct GitHub Actions');
+    console.log('❌ Upload video echoue - ABANDON');
+    return { success: false, error: 'Upload video echoue' };
   }
 
+  // 4. Construire la caption
   const whatsapp = (script.cta || WHATSAPP_DEFAULT).replace('wa.me/', '');
   const caption = `${script.hook}\n\n${script.description || ''}\n\n${script.hashtags || ''}\n\n📞 Interesse ? Contacte-moi sur WhatsApp 👉 wa.me/${whatsapp}`;
 
-  console.log(`📝 Caption (${caption.length} chars): ${caption.substring(0, 100)}...`);
+  console.log(`📝 Caption (${caption.length} chars)`);
 
-  const postBody = {
-    text: caption.substring(0, 2200),
+  // 5. Créer le post via Buffer API
+  const postData = {
+    access_token: BUFFER_API_KEY,
     profile_ids: [profile.id],
-    now: true,
-    media: []
+    text: caption.substring(0, 2200),
+    now: true
   };
 
   if (videoUrl) {
-    postBody.media = [{
+    postData.media = [{
       type: 'video',
-      url: videoUrl,
-      thumbnail_url: videoUrl
+      url: videoUrl
     }];
-    console.log(`🎬 Video URL: ${videoUrl}`);
-  } else {
-    console.log('⚠️ Pas de video URL, publication texte uniquement');
+    console.log(`🎬 Video URL ajoutee: ${videoUrl}`);
   }
 
   console.log(`📤 Buffer: envoi du post...`);
   console.log(`   Profile ID: ${profile.id}`);
   console.log(`   Platform: ${profile.service}`);
+  console.log(`   Avec video: ${videoUrl ? 'OUI' : 'NON'}`);
 
   const postResult = await fetchJSON('https://api.bufferapp.com/1/updates/create.json', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      access_token: BUFFER_API_KEY,
-      ...postBody
-    })
+    body: JSON.stringify(postData)
   });
 
-  console.log(`📥 Buffer reponse: ${JSON.stringify(postResult.data).substring(0, 500)}`);
+  console.log(`📥 Buffer reponse complete: ${JSON.stringify(postResult.data).substring(0, 500)}`);
 
   if (postResult.status === 200 && postResult.data && (postResult.data.success || postResult.data.id)) {
-    console.log(`✅ Buffer: publie avec succes sur ${account.platform} (${account.login})`);
+    console.log(`✅ Buffer: PUBLIE AVEC SUCCES sur ${account.platform} (${account.login})`);
+    console.log(`   Post ID: ${postResult.data.id}`);
     return { 
       success: true, 
       platform: account.platform, 
@@ -638,7 +671,7 @@ async function publishViaBuffer(videoPath, account, script) {
       postId: postResult.data.id
     };
   } else {
-    console.log(`⚠️ Buffer reponse erreur: ${JSON.stringify(postResult.data)}`);
+    console.log(`❌ Buffer ECHEC: ${JSON.stringify(postResult.data)}`);
     return { success: false, error: JSON.stringify(postResult.data) };
   }
 }
@@ -699,7 +732,7 @@ async function publishViaUploadPost(videoPath, account, script) {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': fullBody.length
       },
-      timeout: 120000
+      timeout: 180000
     }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -726,7 +759,7 @@ async function publishViaUploadPost(videoPath, account, script) {
 
     req.on('timeout', () => {
       req.destroy();
-      console.log('⚠️ Upload-Post timeout (traitement en cours cote serveur)');
+      console.log('⚠️ Upload-Post timeout');
       resolve({ success: true, message: 'Timeout mais probablement en cours' });
     });
 
@@ -788,11 +821,15 @@ async function processAccount(account, products, history) {
   let publishResult = { success: false, error: 'Non tente' };
 
   if (BUFFER_API_KEY) {
-    console.log('\n📤 Publication via Buffer...');
+    console.log('\n════════════════════════════════════════');
+    console.log('📤 PUBLICATION VIA BUFFER...');
+    console.log('════════════════════════════════════════');
     publishResult = await publishViaBuffer(finalVideo, account, script);
   }
   else if (UPLOADPOST_API_KEY) {
-    console.log('\n📤 Publication via Upload-Post...');
+    console.log('\n════════════════════════════════════════');
+    console.log('📤 PUBLICATION VIA UPLOAD-POST...');
+    console.log('════════════════════════════════════════');
     publishResult = await publishViaUploadPost(finalVideo, account, script);
   }
   else {
@@ -908,6 +945,7 @@ async function main() {
       }
     } catch (err) {
       console.error(`❌ Erreur compte ${account.login}:`, err.message);
+      console.error(err.stack);
       results.push(null);
     }
   }
