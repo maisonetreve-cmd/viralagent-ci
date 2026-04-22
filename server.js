@@ -1,76 +1,47 @@
-// ViralAgent Pro - Backend 100% autonome
-// Grok/Groq (LLM) + Pexels + Edge TTS + FFmpeg + Buffer
-
+// ViralAgent Pro - Multi-plateformes (TikTok + Instagram + Facebook)
 const { execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 const https = require('https');
 const http = require('http');
 
 // ============ CONFIG ============
-const GROK_API_KEY = process.env.GROK_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const LLM_KEY = GROQ_API_KEY || GROK_API_KEY || GEMINI_API_KEY || '';
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
-const UPLOADPOST_API_KEY = process.env.UPLOADPOST_API_KEY || '';
 const BUFFER_API_KEY = process.env.BUFFER_API_KEY || '';
-const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250700000000';
+const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506500';
 const TZ = process.env.TZ || 'Africa/Abidjan';
 
-function detectProvider() {
-  if (GROQ_API_KEY.startsWith('gsk_')) return 'groq';
-  if (GROK_API_KEY.startsWith('xai-')) return 'grok';
-  if (GEMINI_API_KEY.startsWith('AIza')) return 'gemini';
-  if (LLM_KEY.startsWith('gsk_')) return 'groq';
-  if (LLM_KEY.startsWith('xai-')) return 'grok';
-  if (LLM_KEY.startsWith('AIza')) return 'gemini';
-  return 'groq';
-}
+// Cookies pour Playwright (fallback si Buffer ne marche pas)
+const TIKTOK_COOKIES_B64 = process.env.TIKTOK_COOKIES_B64 || '';
+const INSTAGRAM_COOKIES_B64 = process.env.INSTAGRAM_COOKIES_B64 || '';
+const FACEBOOK_COOKIES_B64 = process.env.FACEBOOK_COOKIES_B64 || '';
 
-function getLLMKey() {
-  const provider = detectProvider();
-  if (provider === 'groq') return GROQ_API_KEY || LLM_KEY;
-  if (provider === 'grok') return GROK_API_KEY || LLM_KEY;
-  if (provider === 'gemini') return GEMINI_API_KEY || LLM_KEY;
-  return LLM_KEY;
-}
+const LLM_KEY = GROQ_API_KEY || GEMINI_API_KEY;
+const LLM_PROVIDER = GROQ_API_KEY.startsWith('gsk_') ? 'groq' : (GEMINI_API_KEY.startsWith('AIza') ? 'gemini' : '');
 
-const LLM_PROVIDER = detectProvider();
-
-// ============ UTILITAIRE FETCH ============
+// ============ UTILITAIRES ============
 function fetchJSON(url, options = {}) {
   return new Promise((resolve, reject) => {
-    const isHttps = url.startsWith('https');
-    const lib = isHttps ? https : http;
+    const lib = url.startsWith('https') ? https : http;
     const parsed = new URL(url);
-
-    const reqOptions = {
+    const req = lib.request({
       hostname: parsed.hostname,
       port: parsed.port,
       path: parsed.pathname + parsed.search,
       method: options.method || 'GET',
       headers: options.headers || {}
-    };
-
-    const req = lib.request(reqOptions, (res) => {
+    }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode, data: JSON.parse(data) });
-        } catch (e) {
-          resolve({ status: res.statusCode, data: data });
-        }
+        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); } 
+        catch (e) { resolve({ status: res.statusCode, data: data }); }
       });
     });
-
     req.on('error', reject);
     req.setTimeout(60000, () => { req.destroy(); reject(new Error('Timeout')); });
-
-    if (options.body) {
-      req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
-    }
+    if (options.body) req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
     req.end();
   });
 }
@@ -79,7 +50,6 @@ function downloadFile(url, outputPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(outputPath);
     const lib = url.startsWith('https') ? https : http;
-
     const doRequest = (requestUrl) => {
       lib.get(requestUrl, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -88,874 +58,415 @@ function downloadFile(url, outputPath) {
         }
         res.pipe(file);
         file.on('finish', () => { file.close(); resolve(outputPath); });
-      }).on('error', (err) => {
-        fs.unlink(outputPath, () => {});
-        reject(err);
-      });
+      }).on('error', reject);
     };
-
     doRequest(url);
   });
 }
 
-// ============ CHARGER CONFIG ============
-function loadConfig() {
-  const paths = ['data/state.json', 'automation/runtime-config.json'];
-  for (const p of paths) {
+// ============ GESTION DES SESSIONS ============
+function loadCookies(platform) {
+  const envVar = `${platform.toUpperCase()}_COOKIES_B64`;
+  if (process.env[envVar]) {
     try {
-      if (fs.existsSync(p)) {
-        const raw = fs.readFileSync(p, 'utf8');
-        const config = JSON.parse(raw);
-        console.log(`📂 Config chargee depuis: ${p}`);
-        return normalizeConfig(config);
-      }
-    } catch (e) {
-      console.log(`⚠️ Erreur lecture ${p}: ${e.message}`);
-    }
+      return JSON.parse(Buffer.from(process.env[envVar], 'base64').toString());
+    } catch(e) { return null; }
   }
-
-  console.log('⚠️ Pas de config trouvee, utilisation config demo');
-  return {
-    products: [{
-      id: 'p1',
-      nom: 'Produit Demo',
-      prix: '5000',
-      description: 'Super produit de demonstration',
-      whatsapp: WHATSAPP_DEFAULT
-    }],
-    accounts: [{
-      id: 'a1',
-      platform: 'TikTok',
-      login: '@demo_ci',
-      active: true,
-      products: ['p1']
-    }],
-    history: []
-  };
-}
-
-function normalizeConfig(config) {
-  if (config.produits && !config.products) {
-    config.products = config.produits.map((p, i) => ({
-      id: p.id || `p${i + 1}`,
-      nom: p.nom || p.name || 'Produit',
-      prix: p.prix || p.price || '0',
-      description: p.description || '',
-      type: p.type || 'physique',
-      whatsapp: p.whatsapp || p.productWhatsapp || '',
-      image_url: p.image_url || p.imageUrl || '',
-      active: p.active !== false,
-      linkedAccounts: p.linkedAccounts || []
-    }));
+  const file = `./${platform}_cookies.json`;
+  if (fs.existsSync(file)) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch(e) { return null; }
   }
-
-  if (config.comptes && !config.accounts) {
-    config.accounts = config.comptes.map((c, i) => ({
-      id: c.id || `a${i + 1}`,
-      platform: c.plateforme || c.platform || 'TikTok',
-      login: c.login || '',
-      active: c.active !== false,
-      products: []
-    }));
-  }
-
-  if (config.products && config.accounts) {
-    config.accounts.forEach(acc => {
-      if (!acc.products || acc.products.length === 0) {
-        acc.products = config.products
-          .filter(p => p.linkedAccounts && p.linkedAccounts.includes(acc.id))
-          .map(p => p.id);
-      }
-    });
-  }
-
-  return config;
-}
-
-// ============ CHARGER HISTORIQUE ============
-function loadHistory() {
-  const paths = ['data/history.json', 'automation/videos/history.json'];
-  for (const p of paths) {
-    try {
-      if (fs.existsSync(p)) {
-        return JSON.parse(fs.readFileSync(p, 'utf8'));
-      }
-    } catch (e) {}
-  }
-  return [];
-}
-
-// ============ SAUVEGARDER HISTORIQUE ============
-function saveHistory(history) {
-  fs.mkdirSync('data', { recursive: true });
-  fs.writeFileSync('data/history.json', JSON.stringify(history, null, 2));
-
-  fs.mkdirSync('automation/videos', { recursive: true });
-  fs.writeFileSync('automation/videos/history.json', JSON.stringify(history, null, 2));
-}
-
-// ============ LLM - GENERER SCRIPT ============
-async function generateScript(product, account, history) {
-  console.log(`🧠 ${LLM_PROVIDER.toUpperCase()} genere script pour: ${product.nom}`);
-
-  const recentHooks = history.slice(-10).map(h => h.hook).filter(Boolean).join('\n- ');
-  const whatsapp = product.whatsapp || WHATSAPP_DEFAULT;
-
-  const prompt = `Tu es un expert marketing viral pour la Cote d'Ivoire.
-
-PRODUIT: ${product.nom}
-PRIX: ${product.prix} FCFA
-DESCRIPTION: ${product.description || ''}
-WHATSAPP: wa.me/${whatsapp}
-COMPTE: ${account.login} (${account.platform})
-
-HOOKS DEJA UTILISES (NE PAS REPETER):
-${recentHooks || 'Aucun encore'}
-
-REGLES IMPORTANTES:
-- Hook 0-3sec: accroche ULTRA virale, JAMAIS utilisee avant
-- Parle comme un Ivoirien (naturel, pas formel)
-- 15-20 secondes maximum
-- CORRIGE L'ORTHOGRAPHE : écris correctement (ex: "sur les" pas "surnles")
-- Toujours finir par: "Ecris-moi sur WhatsApp wa.me/${whatsapp}"
-- Hook maximum 35 caracteres pour affichage video
-
-Reponds UNIQUEMENT en JSON valide:
-{
-  "persona": "Prenom, age, quartier Abidjan",
-  "hook": "phrase d'accroche 0-3sec (orthographe correcte, max 35 caracteres)",
-  "probleme": "douleur du client en 1 phrase",
-  "solution": "comment le produit regle le probleme",
-  "preuve": "chiffre ou resultat concret",
-  "cta": "wa.me/${whatsapp}",
-  "hashtags": "#tag1 #tag2 #tag3 #tag4 #tag5",
-  "description": "description post optimisee",
-  "motsCles": "mots-cles pour Pexels en anglais"
-}`;
-
-  let result;
-
-  if (LLM_PROVIDER === 'grok') {
-    const resp = await fetchJSON('https://api.x.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${getLLMKey()}`
-      },
-      body: JSON.stringify({
-        model: 'grok-3-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.9,
-        max_tokens: 1000
-      })
-    });
-
-    if (resp.status !== 200) throw new Error(`Grok API error: ${JSON.stringify(resp.data)}`);
-    const content = resp.data.choices[0].message.content;
-    result = JSON.parse(content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-
-  } else if (LLM_PROVIDER === 'groq') {
-    const resp = await fetchJSON('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${getLLMKey()}`
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.9,
-        max_tokens: 1000,
-        response_format: { type: 'json_object' }
-      })
-    });
-
-    if (resp.status !== 200) throw new Error(`Groq API error: ${JSON.stringify(resp.data)}`);
-    result = JSON.parse(resp.data.choices[0].message.content);
-
-  } else if (LLM_PROVIDER === 'gemini') {
-    const resp = await fetchJSON(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${getLLMKey()}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.9, maxOutputTokens: 1000 }
-        })
-      }
-    );
-
-    if (resp.status !== 200) throw new Error(`Gemini API error: ${JSON.stringify(resp.data)}`);
-    const text = resp.data.candidates[0].content.parts[0].text;
-    result = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-  }
-
-  console.log(`✅ Script: "${result.hook}"`);
-  return result;
-}
-
-// ============ PEXELS - TELECHARGER VIDEO ============
-async function downloadPexelsVideo(keywords, outputPath) {
-  console.log(`🎬 Pexels: recherche "${keywords}"`);
-
-  if (!PEXELS_API_KEY) {
-    console.log('⚠️ Pas de cle Pexels, generation video placeholder');
-    generatePlaceholderVideo(outputPath);
-    return outputPath;
-  }
-
-  const page = Math.floor(Math.random() * 3) + 1;
-  const url = `https://api.pexels.com/videos/search?query=${encodeURIComponent(keywords)}&orientation=portrait&size=medium&per_page=15&page=${page}`;
-
-  const resp = await fetchJSON(url, {
-    headers: { 'Authorization': PEXELS_API_KEY }
-  });
-
-  if (resp.status !== 200 || !resp.data.videos || resp.data.videos.length === 0) {
-    console.log('⚠️ Aucune video Pexels, generation placeholder');
-    generatePlaceholderVideo(outputPath);
-    return outputPath;
-  }
-
-  const videos = resp.data.videos;
-  const video = videos[Math.floor(Math.random() * videos.length)];
-  const fileUrl = video.video_files.find(f => f.quality === 'hd' || f.quality === 'sd');
-
-  if (!fileUrl || !fileUrl.link) {
-    console.log('⚠️ Pas de lien video, generation placeholder');
-    generatePlaceholderVideo(outputPath);
-    return outputPath;
-  }
-
-  await downloadFile(fileUrl.link, outputPath);
-  console.log(`✅ Video telechargee: ${outputPath}`);
-  return outputPath;
-}
-
-// ============ VIDEO PLACEHOLDER ============
-function generatePlaceholderVideo(outputPath) {
-  console.log('🎨 Generation video placeholder (fond colore)...');
-  try {
-    execSync(
-      `ffmpeg -f lavfi -i "color=c=0x1a1a2e:s=1080x1920:d=20" -c:v libx264 -preset ultrafast -crf 28 -y "${outputPath}"`,
-      { timeout: 30000, stdio: 'pipe' }
-    );
-    console.log('✅ Video placeholder creee');
-  } catch (e) {
-    console.error('❌ Erreur placeholder:', e.message);
-    throw e;
-  }
-}
-
-// ============ EDGE TTS - GENERER VOIX ============
-function generateVoice(script, outputPath) {
-  console.log('🗣️ Edge TTS: generation voix...');
-
-  const texte = `${script.hook}. ${script.probleme}. ${script.solution}. ${script.preuve}. Ecris-moi sur WhatsApp.`;
-  const texteClean = texte.replace(/['"\\]/g, '').replace(/\n/g, ' ').substring(0, 500);
-
-  try {
-    execSync(
-      `edge-tts --voice fr-FR-DeniseNeural --text "${texteClean}" --write-media "${outputPath}" --rate=+15%`,
-      { timeout: 30000, stdio: 'pipe' }
-    );
-    console.log('✅ Voix generee');
-  } catch (e) {
-    console.log('⚠️ Edge TTS echoue, generation silence');
-    execSync(
-      `ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 15 -c:a aac -y "${outputPath}"`,
-      { timeout: 15000, stdio: 'pipe' }
-    );
-  }
-  return outputPath;
-}
-
-// ============ FFMPEG - MONTER VIDEO + COMPRESSER ============
-function mountVideo(videoPath, audioPath, script, outputPath) {
-  console.log('✂️ FFmpeg: montage video...');
-
-  const splitTextIntoLines = (text, maxChars = 32) => {
-    const cleanText = text.replace(/\s+/g, ' ').trim();
-    const words = cleanText.split(' ');
-    const lines = [];
-    let currentLine = '';
-    
-    for (const word of words) {
-      const testLine = currentLine ? `${currentLine} ${word}` : word;
-      if (testLine.length <= maxChars) {
-        currentLine = testLine;
-      } else {
-        if (currentLine) lines.push(currentLine);
-        currentLine = word;
-      }
-    }
-    if (currentLine) lines.push(currentLine);
-    return lines.slice(0, 2);
-  };
-
-  const hookRaw = (script.hook || 'Offre Speciale')
-    .replace(/['"\\]/g, '')
-    .replace(/:/g, '')
-    .trim();
-  
-  const hookLines = splitTextIntoLines(hookRaw, 32);
-  const hook = hookLines.join('\\n');
-
-  const whatsappRaw = (script.cta || WHATSAPP_DEFAULT)
-    .replace('wa.me/', '')
-    .replace(/[^0-9]/g, '');
-  
-  const whatsapp = whatsappRaw.length > 10 ? whatsappRaw.substring(0, 13) : whatsappRaw;
-  const cta = `WhatsApp : ${whatsapp}`;
-
-  // Compression pour Buffer (<10MB)
-  const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
-    -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,\
-drawtext=text='${hook}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.08:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,\
-drawtext=text='${cta}':fontsize=38:fontcolor=yellow:x=(w-text_w)/2:y=h*0.92:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" \
-    -map 0:v -map 1:a \
-    -c:v libx264 -preset fast -crf 28 \
-    -c:a aac -b:a 96k \
-    -shortest -t 20 \
-    -y "${outputPath}"`;
-
-  try {
-    execSync(cmd, { timeout: 120000, stdio: 'pipe' });
-    console.log('✅ Video montee');
-    
-    // Vérifier taille
-    const stats = fs.statSync(outputPath);
-    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-    console.log(`📦 Taille video: ${sizeMB} MB`);
-    
-    if (stats.size > 10 * 1024 * 1024) {
-      console.log('⚠️ Video trop lourde (>10MB), re-compression...');
-      execSync(
-        `ffmpeg -i "${outputPath}" -c:v libx264 -preset fast -crf 32 -c:a aac -b:a 64k -t 15 -y "${outputPath}"`,
-        { timeout: 120000, stdio: 'pipe' }
-      );
-    }
-  } catch (e) {
-    console.log('⚠️ Montage avec texte echoue, montage simple...');
-    execSync(
-      `ffmpeg -i "${videoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -t 20 -y "${outputPath}"`,
-      { timeout: 120000, stdio: 'pipe' }
-    );
-  }
-
-  return outputPath;
-}
-
-// ============ PUBLIER VIA BUFFER API (VERSION FINALE) ============
-async function getBufferProfiles() {
-  console.log('\n📋 Buffer: recuperation des profils...');
-  
-  if (!BUFFER_API_KEY) {
-    console.log('❌ BUFFER_API_KEY manquante');
-    return [];
-  }
-
-  const url = `https://api.bufferapp.com/1/profiles.json?access_token=${BUFFER_API_KEY}`;
-  console.log(`🔗 URL Buffer: ${url.substring(0, 80)}...`);
-  
-  const result = await fetchJSON(url, { method: 'GET' });
-
-  console.log(`📥 Buffer reponse: statut ${result.status}`);
-
-  if (result.status === 200 && Array.isArray(result.data)) {
-    console.log(`✅ Buffer: ${result.data.length} profil(s) trouves`);
-    result.data.forEach(p => {
-      console.log(`   → ${p.formatted_username} (${p.service}) - ID: ${p.id}`);
-    });
-    return result.data;
-  } else {
-    console.log(`❌ Buffer profils erreur: ${JSON.stringify(result.data).substring(0, 200)}`);
-    return [];
-  }
-}
-
-async function uploadVideoToTmpHost(videoPath) {
-  console.log('\n☁️ Upload video vers hebergement temporaire...');
-
-  if (!fs.existsSync(videoPath)) {
-    console.log(`❌ Fichier video inexistant: ${videoPath}`);
-    return null;
-  }
-
-  const videoData = fs.readFileSync(videoPath);
-  const sizeMB = (videoData.length / 1024 / 1024).toFixed(2);
-  console.log(`📦 Taille video: ${sizeMB} MB`);
-
-  // Service principal: tmpfiles.org (plus fiable pour vidéo)
-  const hosts = [
-    { hostname: 'tmpfiles.org', path: '/api/v1/upload', fieldName: 'file' },
-    { hostname: 'file.io', path: '/', fieldName: 'file' },
-    { hostname: '0x0.st', path: '/', fieldName: 'file' }
-  ];
-
-  for (const host of hosts) {
-    try {
-      console.log(`   Essai upload via ${host.hostname}...`);
-
-      const boundary = '----BufferUpload' + Date.now();
-      const fileHeader = Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${host.fieldName}"; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`,
-        'utf8'
-      );
-      const fileFooter = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-      const fullBody = Buffer.concat([fileHeader, videoData, fileFooter]);
-
-      const url = await new Promise((resolve) => {
-        const req = https.request({
-          hostname: host.hostname,
-          path: host.path,
-          method: 'POST',
-          headers: {
-            'Content-Type': `multipart/form-data; boundary=${boundary}`,
-            'Content-Length': fullBody.length
-          },
-          timeout: 180000
-        }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            console.log(`   ${host.hostname} reponse brute: ${data.substring(0, 300)}`);
-            try {
-              const json = JSON.parse(data);
-              if (json.link) { 
-                console.log(`   ✅ Lien trouve: ${json.link}`);
-                resolve(json.link); 
-                return; 
-              }
-              if (json.data && json.data.url) { 
-                console.log(`   ✅ Lien trouve: ${json.data.url}`);
-                resolve(json.data.url); 
-                return; 
-              }
-              if (json.url) {
-                console.log(`   ✅ Lien trouve: ${json.url}`);
-                resolve(json.url);
-                return;
-              }
-            } catch (e) {
-              console.log(`   ⚠️ Pas de JSON valide: ${e.message}`);
-            }
-            const trimmed = data.trim();
-            if (trimmed.startsWith('http')) {
-              console.log(`   ✅ URL directe: ${trimmed}`);
-              resolve(trimmed);
-            } else {
-              console.log(`   ⚠️ Pas d URL dans la reponse`);
-              resolve(null);
-            }
-          });
-        });
-
-        req.on('error', (err) => {
-          console.log(`   ${host.hostname} erreur: ${err.message}`);
-          resolve(null);
-        });
-        req.on('timeout', () => { 
-          req.destroy(); 
-          console.log(`   ${host.hostname} timeout`);
-          resolve(null); 
-        });
-        req.write(fullBody);
-        req.end();
-      });
-
-      if (url) {
-        console.log(`✅ Video uploadee avec succes: ${url}`);
-        return url;
-      }
-    } catch (e) {
-      console.log(`⚠️ ${host.hostname} echoue: ${e.message}`);
-    }
-  }
-
-  console.log('⚠️ Tous les services d upload ont echoue');
   return null;
 }
 
-async function publishViaBuffer(videoPath, account, script) {
-  if (!BUFFER_API_KEY) {
-    return { success: false, error: 'Pas de cle BUFFER_API_KEY' };
-  }
-
-  console.log(`\n📤 Buffer: publication sur ${account.platform} (${account.login})...`);
-
-  // 1. Récupérer les profils
-  const profiles = await getBufferProfiles();
-  if (profiles.length === 0) {
-    return { success: false, error: 'Aucun profil Buffer trouve' };
-  }
-
-  // 2. Trouver le bon profil
-  const platformMap = {
-    'tiktok': 'tiktok',
-    'instagram': 'instagram'
-  };
-  const targetPlatform = platformMap[account.platform.toLowerCase()] || account.platform.toLowerCase();
-  const targetLogin = account.login.replace('@', '').toLowerCase();
-
-  let profile = profiles.find(p =>
-    p.service === targetPlatform &&
-    (p.formatted_username || '').replace('@', '').toLowerCase() === targetLogin
-  );
-
-  if (!profile) {
-    profile = profiles.find(p => p.service === targetPlatform);
-  }
-
-  if (!profile) {
-    console.log(`⚠️ Buffer: aucun profil ${targetPlatform} trouve`);
-    console.log(`   Profils disponibles: ${profiles.map(p => `${p.service}:${p.formatted_username}`).join(', ')}`);
-    return { success: false, error: `Profil ${targetPlatform} non trouve` };
-  }
-
-  console.log(`✅ Buffer profil selectionne: ${profile.formatted_username} (${profile.service}) - ID: ${profile.id}`);
-
-  // 3. Upload video
-  const videoUrl = await uploadVideoToTmpHost(videoPath);
-  
-  if (!videoUrl) {
-    console.log('❌ Upload video echoue - ABANDON');
-    return { success: false, error: 'Upload video echoue' };
-  }
-
-  // 4. Construire la caption
-  const whatsapp = (script.cta || WHATSAPP_DEFAULT).replace('wa.me/', '');
-  const caption = `${script.hook}\n\n${script.description || ''}\n\n${script.hashtags || ''}\n\n📞 Interesse ? Contacte-moi sur WhatsApp 👉 wa.me/${whatsapp}`;
-
-  console.log(`📝 Caption (${caption.length} chars)`);
-
-  // 5. Créer le post via Buffer API
-  const postData = {
-    access_token: BUFFER_API_KEY,
-    profile_ids: [profile.id],
-    text: caption.substring(0, 2200),
-    now: true
-  };
-
-  if (videoUrl) {
-    postData.media = [{
-      type: 'video',
-      url: videoUrl
-    }];
-    console.log(`🎬 Video URL ajoutee: ${videoUrl}`);
-  }
-
-  console.log(`📤 Buffer: envoi du post...`);
-  console.log(`   Profile ID: ${profile.id}`);
-  console.log(`   Platform: ${profile.service}`);
-  console.log(`   Avec video: ${videoUrl ? 'OUI' : 'NON'}`);
-
-  const postResult = await fetchJSON('https://api.bufferapp.com/1/updates/create.json', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(postData)
-  });
-
-  console.log(`📥 Buffer reponse complete: ${JSON.stringify(postResult.data).substring(0, 500)}`);
-
-  if (postResult.status === 200 && postResult.data && (postResult.data.success || postResult.data.id)) {
-    console.log(`✅ Buffer: PUBLIE AVEC SUCCES sur ${account.platform} (${account.login})`);
-    console.log(`   Post ID: ${postResult.data.id}`);
-    return { 
-      success: true, 
-      platform: account.platform, 
-      profileId: profile.id,
-      postId: postResult.data.id
-    };
-  } else {
-    console.log(`❌ Buffer ECHEC: ${JSON.stringify(postResult.data)}`);
-    return { success: false, error: JSON.stringify(postResult.data) };
-  }
+function saveCookiesDisplay(cookies, platform) {
+  const b64 = Buffer.from(JSON.stringify(cookies)).toString('base64');
+  console.log(`\n📋 ${platform.toUpperCase()}_COOKIES_B64 (copie dans GitHub Secrets):`);
+  console.log(b64);
+  return b64;
 }
 
-// ============ PUBLIER VIA UPLOAD-POST API ============
-async function publishViaUploadPost(videoPath, account, script) {
-  if (!UPLOADPOST_API_KEY) {
-    console.log('⚠️ Pas de cle UPLOADPOST_API_KEY, publication ignoree');
-    return { success: false, error: 'Pas de cle API Upload-Post' };
-  }
-
-  const platform = account.platform.toLowerCase().replace('instagram', 'instagram').replace('tiktok', 'tiktok');
-  const caption = `${script.hook}\n\n${script.description || ''}\n\n${script.hashtags || ''}\n\nInteresse ? Contacte-moi sur WhatsApp 👉 ${script.cta}`;
-
-  console.log(`📤 Upload-Post: publication sur ${platform} (${account.login})...`);
-
-  const videoData = fs.readFileSync(videoPath);
-  const boundary = '----ViralAgent' + Date.now();
-
-  let body = '';
-  
-  body += `--${boundary}\r\n`;
-  body += `Content-Disposition: form-data; name="user"\r\n\r\n`;
-  body += `${account.login.replace('@', '')}\r\n`;
-
-  body += `--${boundary}\r\n`;
-  body += `Content-Disposition: form-data; name="platform[]"\r\n\r\n`;
-  body += `${platform}\r\n`;
-
-  body += `--${boundary}\r\n`;
-  body += `Content-Disposition: form-data; name="title"\r\n\r\n`;
-  body += `${caption.substring(0, 2200)}\r\n`;
-
-  body += `--${boundary}\r\n`;
-  body += `Content-Disposition: form-data; name="timezone"\r\n\r\n`;
-  body += `${TZ}\r\n`;
-
-  body += `--${boundary}\r\n`;
-  body += `Content-Disposition: form-data; name="async_upload"\r\n\r\n`;
-  body += `true\r\n`;
-
-  const preFileBuffer = Buffer.from(body, 'utf8');
-  const fileHeader = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`,
-    'utf8'
-  );
-  const fileFooter = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-
-  const fullBody = Buffer.concat([preFileBuffer, fileHeader, videoData, fileFooter]);
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.upload-post.com',
-      path: '/api/upload',
-      method: 'POST',
-      headers: {
-        'Authorization': `Apikey ${UPLOADPOST_API_KEY}`,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': fullBody.length
-      },
-      timeout: 180000
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(data);
-          if (result.success) {
-            console.log(`✅ Publie sur ${platform}: ${JSON.stringify(result)}`);
-          } else {
-            console.log(`⚠️ Upload-Post reponse: ${data}`);
-          }
-          resolve(result);
-        } catch (e) {
-          console.log(`⚠️ Upload-Post raw: ${data}`);
-          resolve({ success: false, error: data });
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      console.error(`❌ Upload-Post erreur: ${err.message}`);
-      resolve({ success: false, error: err.message });
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      console.log('⚠️ Upload-Post timeout');
-      resolve({ success: true, message: 'Timeout mais probablement en cours' });
-    });
-
-    req.write(fullBody);
-    req.end();
-  });
-}
-
-// ============ TRAITER UN COMPTE ============
-async function processAccount(account, products, history) {
-  console.log(`\n📱 Traitement: ${account.login} (${account.platform})`);
-
-  let accountProducts = products.filter(p =>
-    (account.products && account.products.includes(p.id)) ||
-    (p.linkedAccounts && p.linkedAccounts.includes(account.id))
-  );
-
-  if (accountProducts.length === 0) {
-    accountProducts = products.filter(p => p.active !== false);
-  }
-
-  if (accountProducts.length === 0) {
-    console.log('⚠️ Aucun produit disponible');
-    return null;
-  }
-
-  const today = new Date().toISOString().split('T')[0];
-  const alreadyDone = history.find(h => h.date === today && h.compte === account.login);
-  if (alreadyDone) {
-    console.log(`⏭️ Deja genere aujourd'hui pour ${account.login}`);
-    return null;
-  }
-
-  const todayIndex = new Date().getDate() % accountProducts.length;
-  const product = accountProducts[todayIndex];
-  console.log(`📦 Produit: ${product.nom} (${product.prix} FCFA)`);
-
-  const script = await generateScript(product, account, history);
-
-  const videoId = `vid_${Date.now()}`;
-  const rawVideo = `output/${videoId}_raw.mp4`;
-  const audioFile = `output/${videoId}.mp3`;
-  const finalVideo = `output/${videoId}_final.mp4`;
-
-  await downloadPexelsVideo(script.motsCles || 'african market woman', rawVideo);
-
-  generateVoice(script, audioFile);
-
-  mountVideo(rawVideo, audioFile, script, finalVideo);
-
-  const archiveDir = 'output/archive';
-  fs.mkdirSync(archiveDir, { recursive: true });
-  const archiveName = `video-${today}-${product.nom.replace(/[^a-zA-Z0-9]/g, '_')}-${account.login.replace('@', '')}.mp4`;
-  fs.copyFileSync(finalVideo, path.join(archiveDir, archiveName));
-
-  try { if (fs.existsSync(rawVideo)) fs.unlinkSync(rawVideo); } catch (e) {}
-  try { if (fs.existsSync(audioFile)) fs.unlinkSync(audioFile); } catch (e) {}
-
-  let publishResult = { success: false, error: 'Non tente' };
-
-  if (BUFFER_API_KEY) {
-    console.log('\n════════════════════════════════════════');
-    console.log('📤 PUBLICATION VIA BUFFER...');
-    console.log('════════════════════════════════════════');
-    publishResult = await publishViaBuffer(finalVideo, account, script);
-  }
-  else if (UPLOADPOST_API_KEY) {
-    console.log('\n════════════════════════════════════════');
-    console.log('📤 PUBLICATION VIA UPLOAD-POST...');
-    console.log('════════════════════════════════════════');
-    publishResult = await publishViaUploadPost(finalVideo, account, script);
-  }
-  else {
-    console.log('\n⚠️ Aucun service de publication configure');
-    console.log('   → BUFFER_API_KEY (recommande, gratuit): publish.buffer.com/settings/api');
-    console.log('   → UPLOADPOST_API_KEY (alternative): upload-post.com');
-    console.log('   → Video generee mais non publiee automatiquement');
-  }
-
-  const entry = {
-    id: videoId,
-    date: today,
-    compte: account.login,
-    plateforme: account.platform,
-    produit: product.nom,
-    hook: script.hook,
-    persona: script.persona,
-    hashtags: script.hashtags,
-    description: script.description,
-    whatsapp: script.cta,
-    videoPath: finalVideo,
-    archivePath: path.join(archiveDir, archiveName),
-    statut: publishResult.success ? 'publiee' : 'generee',
-    publishResult: publishResult.success ? 'OK' : (publishResult.error || 'echec'),
-    vues: 0,
-    likes: 0,
-    commentaires: 0
-  };
-
-  history.push(entry);
-  saveHistory(history);
-
-  console.log(`\n✅ Video prete: ${finalVideo}`);
-  console.log(`📁 Archive: ${archiveName}`);
-  console.log(`📤 Publication: ${entry.statut} (${entry.publishResult})`);
-  return { script, videoPath: finalVideo, entry, publishResult };
-}
-
-// ============ RESUME FINAL ============
-function printSummary(results) {
-  console.log('\n' + '='.repeat(50));
-  console.log('📊 RESUME DE LA SESSION');
-  console.log('='.repeat(50));
-
-  const success = results.filter(r => r !== null);
-  console.log(`✅ Videos generees: ${success.length}`);
-  console.log(`❌ Echecs: ${results.length - success.length}`);
-
-  success.forEach(r => {
-    if (r && r.entry) {
-      console.log(`  📹 ${r.entry.produit} → ${r.entry.compte} (${r.entry.plateforme})`);
-      console.log(`     Hook: "${r.entry.hook}"`);
-      console.log(`     WhatsApp: ${r.entry.whatsapp}`);
-      console.log(`     Statut: ${r.entry.statut} (${r.entry.publishResult})`);
+// ============ CONFIG & HISTORIQUE ============
+function loadConfig() {
+  try {
+    if (fs.existsSync('data/state.json')) {
+      return JSON.parse(fs.readFileSync('data/state.json', 'utf8'));
     }
-  });
+  } catch(e) {}
+  return {
+    products: [{ id: 'p1', nom: 'Produit Demo', prix: '12000', whatsapp: WHATSAPP_DEFAULT, active: true }],
+    accounts: [
+      { id: 'a1', platform: 'TikTok', login: '@tiktok_account', active: true, products: ['p1'] },
+      { id: 'a2', platform: 'Instagram', login: '@instagram_account', active: true, products: ['p1'] },
+      { id: 'a3', platform: 'Facebook', login: 'facebook_page_name', active: true, products: ['p1'] }
+    ]
+  };
+}
 
-  if (fs.existsSync('output')) {
-    const files = fs.readdirSync('output').filter(f => f.endsWith('_final.mp4'));
-    console.log(`\n📁 Fichiers prets a publier:`);
-    files.forEach(f => console.log(`  → output/${f}`));
+function loadHistory() {
+  try { return JSON.parse(fs.readFileSync('data/history.json', 'utf8')); } catch(e) { return []; }
+}
+
+function saveHistory(history) {
+  fs.mkdirSync('data', { recursive: true });
+  fs.writeFileSync('data/history.json', JSON.stringify(history, null, 2));
+}
+
+// ============ LLM ============
+async function generateScript(product, history) {
+  const recentHooks = history.slice(-5).map(h => h.hook).join(', ');
+  const prompt = `Expert marketing viral Côte d'Ivoire. Hook MAX 30 caractères, orthographe parfaite.
+Produit: ${product.nom}
+Règles: Pas de "surles", accents corrects.
+Réponds JSON: {"hook":"...","description":"...","hashtags":"#..."}`;
+
+  try {
+    let result;
+    if (LLM_PROVIDER === 'groq') {
+      const resp = await fetchJSON('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${LLM_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{role:'user',content:prompt}], response_format: { type: 'json_object' } })
+      });
+      result = JSON.parse(resp.data.choices[0].message.content);
+    } else {
+      const resp = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${LLM_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const text = resp.data.candidates[0].content.parts[0].text;
+      result = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, ''));
+    }
+    if (result.hook) result.hook = result.hook.replace(/surles/gi, 'sur les').substring(0, 30);
+    return result;
+  } catch (e) {
+    return { hook: 'Découvre cette astuce!', description: '', hashtags: '#viral #afrique' };
+  }
+}
+
+// ============ GÉNÉRATION VIDÉO ============
+async function downloadPexelsVideo(keywords, outputPath) {
+  if (!PEXELS_API_KEY) {
+    execSync(`ffmpeg -f lavfi -i "color=c=0x1a1a2e:s=1080x1920:d=20" -c:v libx264 -pix_fmt yuv420p -y "${outputPath}"`, { stdio: 'pipe' });
+    return;
+  }
+  try {
+    const resp = await fetchJSON(`https://api.pexels.com/videos/search?query=${encodeURIComponent(keywords)}&orientation=portrait&per_page=10`, {
+      headers: { 'Authorization': PEXELS_API_KEY }
+    });
+    if (resp.data?.videos?.length > 0) {
+      const video = resp.data.videos[Math.floor(Math.random() * resp.data.videos.length)];
+      const file = video.video_files.find(f => f.quality === 'hd' || f.quality === 'sd');
+      if (file) await downloadFile(file.link, outputPath);
+    }
+  } catch(e) {
+    execSync(`ffmpeg -f lavfi -i "color=c=0x1a1a2e:s=1080:1920:d=20" -c:v libx264 -pix_fmt yuv420p -y "${outputPath}"`, { stdio: 'pipe' });
+  }
+}
+
+function generateVoice(script, outputPath) {
+  const text = `${script.hook}. Contacte-moi.`.replace(/['"\\]/g, '').substring(0, 200);
+  try {
+    execSync(`edge-tts --voice fr-FR-DeniseNeural --text "${text}" --write-media "${outputPath}" --rate=+10%`, { timeout: 30000, stdio: 'pipe' });
+  } catch (e) {
+    execSync(`ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 10 -c:a aac -y "${outputPath}"`, { stdio: 'pipe' });
+  }
+}
+
+function mountVideo(videoPath, audioPath, script, outputPath) {
+  let hook = (script.hook || 'Découvre!').replace(/['"\\]/g, '').substring(0, 30);
+  const whatsapp = WHATSAPP_DEFAULT;
+  
+  const hookFile = `/tmp/hook_${Date.now()}.txt`;
+  const ctaFile = `/tmp/cta_${Date.now()}.txt`;
+  
+  fs.writeFileSync(hookFile, hook);
+  fs.writeFileSync(ctaFile, `CONTACTE-MOI\n📱 ${whatsapp}`);
+
+  const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
+    -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p,
+    drawbox=x=100:y=(h*0.12):w=(w-200):h=(th+60):color=black@0.8:t=fill,
+    drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${hookFile}':fontsize=56:fontcolor=#FFD700:borderw=5:bordercolor=black:x=(w-text_w)/2:y=(h*0.15),
+    drawbox=x=100:y=(h*0.78):w=(w-200):h=(th+50):color=#25D366@0.9:t=fill,
+    drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${ctaFile}':fontsize=42:fontcolor=white:borderw=4:bordercolor=black:x=(w-text_w)/2:y=(h*0.80)" \
+    -c:v libx264 -preset veryfast -crf 24 -c:a aac -shortest -t 25 -pix_fmt yuv420p -y "${outputPath}"`;
+
+  try { execSync(cmd, { timeout: 120000, stdio: 'pipe' }); } 
+  finally { try { fs.unlinkSync(hookFile); fs.unlinkSync(ctaFile); } catch(e) {} }
+}
+
+// ============ PUBLICATION BUFFER (Instagram & Facebook) ============
+async function publishViaBuffer(videoPath, caption, platform) {
+  if (!BUFFER_API_KEY) return { success: false, error: 'Pas de clé Buffer' };
+
+  console.log(`   Tentative Buffer pour ${platform}...`);
+  
+  try {
+    // Récupérer profils
+    const profilesRes = await fetchJSON(`https://api.bufferapp.com/1/profiles.json?access_token=${BUFFER_API_KEY}`);
+    if (profilesRes.status !== 200) return { success: false, error: 'Clé Buffer invalide' };
+
+    const profile = profilesRes.data.find(p => p.service === platform.toLowerCase());
+    if (!profile) return { success: false, error: `${platform} non connecté dans Buffer` };
+
+    // Lire vidéo
+    const videoBuffer = fs.readFileSync(videoPath);
+    
+    // Construire multipart
+    const boundary = '----Buffer' + Date.now();
+    const parts = [
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="access_token"\r\n\r\n${BUFFER_API_KEY}`),
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="profile_ids[]"\r\n\r\n${profile.id}`),
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\n${caption.substring(0, 2200)}`),
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="now"\r\n\r\ntrue`),
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="media[file]"; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`),
+      videoBuffer,
+      Buffer.from(`\r\n--${boundary}--\r\n`)
+    ];
+    
+    const result = await new Promise((resolve) => {
+      const req = https.request({
+        hostname: 'api.bufferapp.com',
+        path: '/1/updates/create.json',
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': Buffer.concat(parts).length },
+        timeout: 180000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+          catch { resolve({ status: res.statusCode, data: data }); }
+        });
+      });
+      req.on('error', (e) => resolve({ status: 0, error: e.message }));
+      req.write(Buffer.concat(parts));
+      req.end();
+    });
+
+    if (result.status === 200 && (result.data.success || result.data.id)) {
+      return { success: true, method: 'Buffer', id: result.data.id };
+    }
+    return { success: false, error: result.data.error || 'Refusé' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// ============ PUBLICATION PLAYWRIGHT (TikTok & Fallback) ============
+async function publishViaPlaywright(videoPath, caption, platform, account) {
+  console.log(`   Tentative Playwright pour ${platform}...`);
+  
+  let chromium;
+  try {
+    ({ chromium } = require('playwright'));
+  } catch(e) {
+    return { success: false, error: 'Playwright non installé' };
   }
 
-  console.log('='.repeat(50));
+  const cookies = loadCookies(platform.toLowerCase());
+  if (!cookies) {
+    return { success: false, error: `Pas de cookies ${platform}. Lance: node server.js --login-${platform.toLowerCase()}` };
+  }
+
+  let browser;
+  try {
+    browser = await chromium.launch({ 
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    
+    const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    await context.addCookies(cookies);
+    const page = await context.newPage();
+
+    let url, selectorFile, selectorCaption, selectorPublish;
+    
+    if (platform === 'TikTok') {
+      url = 'https://www.tiktok.com/upload';
+      selectorFile = 'input[type="file"]';
+      selectorCaption = '[contenteditable="true"]';
+      selectorPublish = 'button:has-text("Publier"), button:has-text("Post")';
+    } else if (platform === 'Instagram') {
+      url = 'https://www.instagram.com/';
+      // Instagram nécessite navigation créateur, simplifié ici
+      return { success: false, error: 'Instagram via Playwright nécessite configuration manuelle avancée' };
+    } else if (platform === 'Facebook') {
+      url = 'https://www.facebook.com/';
+      // Facebook nécessite page spécifique
+      return { success: false, error: 'Facebook via Playwright utilisez Buffer de préférence' };
+    }
+
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+    
+    if (page.url().includes('login')) {
+      return { success: false, error: 'Session expirée' };
+    }
+
+    // Upload
+    const inputFile = await page.waitForSelector(selectorFile, { timeout: 10000 });
+    await inputFile.setInputFiles(videoPath);
+    await page.waitForTimeout(8000);
+
+    // Caption
+    const editor = await page.$(selectorCaption);
+    if (editor) {
+      await editor.click();
+      await editor.fill(caption);
+      await page.waitForTimeout(1000);
+    }
+
+    // Publish
+    const publishBtn = await page.$(selectorPublish);
+    if (publishBtn) {
+      await publishBtn.click();
+      await page.waitForTimeout(15000);
+      
+      // Sauvegarder nouveaux cookies
+      const newCookies = await context.cookies();
+      saveCookiesDisplay(newCookies, platform.toLowerCase());
+      
+      await browser.close();
+      return { success: true, method: 'Playwright' };
+    }
+    
+    await browser.close();
+    return { success: false, error: 'Bouton publier non trouvé' };
+    
+  } catch (error) {
+    if (browser) await browser.close();
+    return { success: false, error: error.message };
+  }
+}
+
+// ============ FONCTION PRINCIPALE DE PUBLICATION ============
+async function publishVideo(videoPath, caption, account) {
+  const platform = account.platform;
+  console.log(`📤 Publication sur ${platform}...`);
+
+  // Stratégie selon la plateforme
+  if (platform === 'TikTok') {
+    // TikTok = Playwright obligatoire (pas d'API)
+    return await publishViaPlaywright(videoPath, caption, 'TikTok', account);
+  } 
+  else if (platform === 'Instagram' || platform === 'Facebook') {
+    // Instagram/Facebook = Buffer d'abord (plus stable), sinon Playwright
+    const bufferResult = await publishViaBuffer(videoPath, caption, platform);
+    if (bufferResult.success) return bufferResult;
+    
+    console.log(`   Buffer a échoué: ${bufferResult.error}`);
+    console.log(`   Tentative Playwright...`);
+    return await publishViaPlaywright(videoPath, caption, platform, account);
+  }
+  
+  return { success: false, error: 'Plateforme inconnue' };
+}
+
+// ============ LOGIN INITIAL (À FAIRE UNE FOIS EN LOCAL) ============
+async function firstLogin(platform) {
+  console.log(`🔐 Connexion ${platform}...`);
+  console.log('Un navigateur va s\'ouvrir. Connecte-toi manuellement.\n');
+  
+  const { chromium } = require('playwright');
+  const browser = await chromium.launch({ headless: false });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  
+  const urls = {
+    tiktok: 'https://www.tiktok.com/login',
+    instagram: 'https://www.instagram.com/accounts/login/',
+    facebook: 'https://www.facebook.com/login'
+  };
+  
+  await page.goto(urls[platform]);
+  console.log('⏳ Connecte-toi... (120s max)');
+  
+  await page.waitForTimeout(5000);
+  
+  // Attendre que l'URL change (connexion réussie)
+  await page.waitForFunction(() => {
+    return !window.location.href.includes('login');
+  }, { timeout: 120000 });
+  
+  await page.waitForTimeout(3000);
+  
+  const cookies = await context.cookies();
+  saveCookiesDisplay(cookies, platform);
+  
+  console.log(`\n✅ Cookies ${platform} sauvegardés!`);
+  console.log(`Copie la valeur base64 ci-dessus dans GitHub Secret: ${platform.toUpperCase()}_COOKIES_B64`);
+  
+  await browser.close();
 }
 
 // ============ MAIN ============
 async function main() {
-  console.log('🚀 ViralAgent Pro - Demarrage');
-  console.log(`⏰ Heure: ${new Date().toLocaleString('fr-CI', { timeZone: TZ })}`);
-  console.log(`🧠 LLM: ${LLM_PROVIDER.toUpperCase()} ${getLLMKey() ? '✅ actif' : '❌ manquant'}`);
-  console.log(`🎬 Pexels: ${PEXELS_API_KEY ? '✅ actif' : '⚠️ manquant (mode placeholder)'}`);
-  console.log(`📤 Buffer: ${BUFFER_API_KEY ? '✅ actif (publication auto)' : '⚠️ non configure'}`);
-  console.log(`📤 Upload-Post: ${UPLOADPOST_API_KEY ? '✅ actif (backup)' : '⚠️ non configure'}`);
-  console.log(`📱 WhatsApp default: wa.me/${WHATSAPP_DEFAULT}`);
+  // Modes login
+  if (process.argv.includes('--login-tiktok')) return await firstLogin('tiktok');
+  if (process.argv.includes('--login-instagram')) return await firstLogin('instagram');
+  if (process.argv.includes('--login-facebook')) return await firstLogin('facebook');
 
-  fs.mkdirSync('output', { recursive: true });
-  fs.mkdirSync('output/archive', { recursive: true });
-  fs.mkdirSync('data', { recursive: true });
+  console.log('🚀 ViralAgent Pro - Multi-Plateformes');
+  console.log(`⏰ ${new Date().toLocaleString('fr-CI', { timeZone: TZ })}`);
+  console.log(`🔑 Buffer: ${BUFFER_API_KEY ? '✅' : '❌'} | Playwright: ${TIKTOK_COOKIES_B64 ? '✅' : '❌'}`);
 
   const config = loadConfig();
   const history = loadHistory();
+  fs.mkdirSync('output', { recursive: true });
 
-  console.log(`\n📦 Produits: ${config.products?.length || 0}`);
-  if (config.products) {
-    config.products.forEach(p => console.log(`  → ${p.nom} (${p.prix} FCFA) WhatsApp: ${p.whatsapp || WHATSAPP_DEFAULT}`));
-  }
-
-  console.log(`👥 Comptes: ${config.accounts?.length || 0}`);
-  if (config.accounts) {
-    config.accounts.forEach(a => console.log(`  → ${a.login} (${a.platform}) ${a.active ? '✅' : '❌'}`));
-  }
-
-  console.log(`📊 Historique: ${history.length} videos`);
-
-  const activeAccounts = (config.accounts || []).filter(a => a.active !== false);
-
-  if (activeAccounts.length === 0) {
-    console.log('⚠️ Aucun compte actif trouve');
-    return;
-  }
-
-  console.log(`\n🎯 ${activeAccounts.length} compte(s) actif(s) a traiter\n`);
-
-  const results = [];
-  for (const account of activeAccounts) {
-    try {
-      const result = await processAccount(account, config.products || [], history);
-      results.push(result);
-      if (activeAccounts.indexOf(account) < activeAccounts.length - 1) {
-        console.log('⏳ Pause 5 secondes...');
-        await new Promise(r => setTimeout(r, 5000));
-      }
-    } catch (err) {
-      console.error(`❌ Erreur compte ${account.login}:`, err.message);
-      console.error(err.stack);
-      results.push(null);
+  // Traiter chaque compte actif
+  for (const account of config.accounts) {
+    if (!account.active) continue;
+    
+    const today = new Date().toISOString().split('T')[0];
+    if (history.find(h => h.date === today && h.compte === account.login)) {
+      console.log(`\n⏭️ ${account.login} (${account.platform}): déjà fait aujourd'hui`);
+      continue;
     }
+
+    console.log(`\n📱 ${account.login} (${account.platform})`);
+    
+    const product = config.products.find(p => account.products?.includes(p.id)) || config.products[0];
+    
+    // Génération
+    const script = await generateScript(product, history);
+    const videoId = `vid_${Date.now()}_${account.platform.toLowerCase()}`;
+    const raw = `output/${videoId}_raw.mp4`;
+    const audio = `output/${videoId}.mp3`;
+    const final = `output/${videoId}_final.mp4`;
+
+    await downloadPexelsVideo(script.motsCles || 'business', raw);
+    generateVoice(script, audio);
+    mountVideo(raw, audio, script, final);
+    
+    try { fs.unlinkSync(raw); fs.unlinkSync(audio); } catch(e) {}
+
+    // Publication
+    const caption = `${script.hook}\n\n${script.description || ''}\n\n${script.hashtags || ''}\n\n📱 ${WHATSAPP_DEFAULT}`;
+    const result = await publishVideo(final, caption, account);
+
+    // Historique
+    history.push({
+      date: today,
+      compte: account.login,
+      plateforme: account.platform,
+      produit: product.nom,
+      hook: script.hook,
+      statut: result.success ? 'publiée' : 'générée',
+      methode: result.method || 'aucune',
+      error: result.error || null
+    });
+    saveHistory(history);
+    
+    console.log(result.success ? `✅ Publié via ${result.method}` : `❌ Échec: ${result.error}`);
+    await new Promise(r => setTimeout(r, 5000)); // Pause entre comptes
   }
 
-  printSummary(results);
-  console.log('\n🎉 Agent termine !');
+  console.log('\n✅ Terminé!');
 }
 
 main().catch(err => {
-  console.error('❌ ERREUR FATALE:', err.message);
-  console.error(err.stack);
+  console.error('❌ Fatal:', err.message);
   process.exit(1);
 });
