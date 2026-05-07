@@ -5,7 +5,8 @@ const http = require('http');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506500';
+const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506508';
+const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
 
 function fetchJSON(url, options = {}) {
   return new Promise((resolve, reject) => {
@@ -13,6 +14,7 @@ function fetchJSON(url, options = {}) {
     const parsed = new URL(url);
     const req = lib.request({
       hostname: parsed.hostname,
+      port: parsed.port,
       path: parsed.pathname + parsed.search,
       method: options.method || 'GET',
       headers: options.headers || {}
@@ -31,6 +33,24 @@ function fetchJSON(url, options = {}) {
   });
 }
 
+function downloadFile(url, outputPath) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(outputPath);
+    const lib = url.startsWith('https') ? https : http;
+    const doRequest = (requestUrl) => {
+      lib.get(requestUrl, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          doRequest(res.headers.location);
+          return;
+        }
+        res.pipe(file);
+        file.on('finish', () => { file.close(); resolve(outputPath); });
+      }).on('error', reject);
+    };
+    doRequest(url);
+  });
+}
+
 async function sendTelegramMessage(text) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log('⚠️ Telegram non configuré');
@@ -46,12 +66,41 @@ async function sendTelegramMessage(text) {
   }
 }
 
+async function downloadPexelsVideo(keywords, outputPath) {
+  if (!PEXELS_API_KEY) {
+    console.log('⚠️ PEXELS_API_KEY manquant - utilisation placeholder');
+    return false;
+  }
+  
+  try {
+    console.log(`🔍 Recherche Pexels: ${keywords}`);
+    const resp = await fetchJSON(`https://api.pexels.com/videos/search?query=${encodeURIComponent(keywords)}&orientation=portrait&per_page=10`, {
+      headers: { 'Authorization': PEXELS_API_KEY }
+    });
+    
+    if (resp.status === 200 && resp.data?.videos?.length > 0) {
+      const video = resp.data.videos[Math.floor(Math.random() * resp.data.videos.length)];
+      const file = video.video_files.find(f => f.quality === 'sd' || f.quality === 'hd');
+      if (file && file.link) {
+        console.log(`   Téléchargement: ${file.link.substring(0, 50)}...`);
+        await downloadFile(file.link, outputPath);
+        console.log('   ✅ Vidéo Pexels téléchargée');
+        return true;
+      }
+    }
+    console.log('   ⚠️ Aucune vidéo trouvée sur Pexels');
+    return false;
+  } catch(e) {
+    console.log('   ⚠️ Erreur Pexels:', e.message);
+    return false;
+  }
+}
+
 async function main() {
   console.log('🚀 Démarrage génération vidéo...');
   
   if (!fs.existsSync('output')) {
     fs.mkdirSync('output', { recursive: true });
-    console.log('✅ Dossier output créé');
   }
   
   const timestamp = Date.now();
@@ -60,41 +109,38 @@ async function main() {
   const finalVideo = `output/vid_${timestamp}_final.mp4`;
   
   try {
-    // Étape 1: Vidéo brute - CORRECTION: size=1080x1920 (avec x) au lieu de s=1080:1920
-    console.log('🎬 Étape 1: Création vidéo brute...');
-    const cmd1 = `ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:d=15 -pix_fmt yuv420p -y "${rawVideo}"`;
-    console.log('Commande:', cmd1);
-    execSync(cmd1, { stdio: 'inherit' });
+    // Étape 1: Vidéo (Pexels ou placeholder)
+    console.log('🎬 Étape 1: Récupération vidéo...');
+    const pexelsOk = await downloadPexelsVideo('african business success', rawVideo);
+    
+    if (!pexelsOk) {
+      console.log('🎨 Création placeholder...');
+      execSync(`ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:d=15 -pix_fmt yuv420p -y "${rawVideo}"`, { stdio: 'pipe' });
+    }
     
     if (!fs.existsSync(rawVideo)) {
       throw new Error('Vidéo brute non créée!');
     }
-    console.log('✅ Vidéo brute créée');
-    
+
     // Étape 2: Audio
     console.log('🎵 Étape 2: Génération audio...');
     try {
-      execSync(`edge-tts --voice fr-FR-DeniseNeural --text "Découvre cette astuce. Contacte moi sur WhatsApp." --write-media "${audioFile}" --rate=+10%`, { timeout: 30000 });
-      console.log('✅ Audio créé');
+      execSync(`edge-tts --voice fr-FR-DeniseNeural --text "Découvre cette astuce. Contacte moi." --write-media "${audioFile}" --rate=+10%`, { timeout: 30000 });
     } catch(e) {
-      console.log('⚠️ Edge TTS échoue, création silence...');
       execSync(`ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 10 -c:a aac -y "${audioFile}"`);
     }
-    
-    if (!fs.existsSync(audioFile)) {
-      throw new Error('Audio non créé!');
-    }
-    
-    // Étape 3: Montage - CORRECTION: size=1080x1920 aussi ici
+
+    // Étape 3: Montage avec TEXTE CORRIGÉ (pas de débordement)
     console.log('✂️ Étape 3: Montage final...');
-    const hook = "Gagne 100k/mois avec cette methode!";
+    
+    // CORRECTION: Texte court pour éviter débordement
+    const hook = "Gagne 100k/mois!"; // 20 caractères max
     const whatsapp = WHATSAPP_DEFAULT;
     
-    // Commande simplifiée sans fichiers texte externes pour éviter les problèmes de chemin
-    const cmd3 = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,format=yuv420p,drawtext=text='${hook}':fontsize=60:fontcolor=white:borderw=5:bordercolor=black:x=(w-text_w)/2:y=h/3,drawtext=text='📱 ${whatsapp}':fontsize=40:fontcolor=#25D366:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.7" -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -y "${finalVideo}"`;
+    // CORRECTION: Police plus petite et position ajustée
+    const cmd3 = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,format=yuv420p,drawtext=text='${hook}':fontsize=90:fontcolor=white:borderw=8:bordercolor=black:x=(w-text_w)/2:y=300,drawtext=text='📱 ${whatsapp}':fontsize=50:fontcolor=#25D366:borderw=5:bordercolor=black:x=(w-text_w)/2:y=1500" -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -y "${finalVideo}"`;
     
-    console.log('Commande montage:', cmd3);
-    execSync(cmd3, { stdio: 'inherit' });
+    execSync(cmd3, { stdio: 'pipe' });
     
     if (!fs.existsSync(finalVideo)) {
       throw new Error('Vidéo finale non créée!');
@@ -103,8 +149,7 @@ async function main() {
     const stats = fs.statSync(finalVideo);
     console.log(`📊 Taille: ${(stats.size/1024/1024).toFixed(2)} MB`);
     
-    // Envoi Telegram
-    await sendTelegramMessage(`🎬 Vidéo générée!\\n📁 ${finalVideo}\\n📊 ${(stats.size/1024/1024).toFixed(2)} MB\\n\\n⬇️ Télécharge depuis les artifacts`);
+    await sendTelegramMessage(`🎬 Vidéo prête!\\n📊 ${(stats.size/1024/1024).toFixed(2)} MB\\n📁 ${finalVideo}`);
     
   } catch (error) {
     console.error('❌ ERREUR:', error.message);
