@@ -5,7 +5,7 @@ const https = require('https');
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506508';
+const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506500';
 
 console.log('🚀 ViralAgent Pro');
 
@@ -79,14 +79,16 @@ async function main() {
     execSync(`edge-tts --voice fr-FR-DeniseNeural --text "${hook}. Contacte moi sur WhatsApp." --write-media "${audioFile}" --rate=+10%`, { timeout: 30000 });
     console.log('✅ Voix générée');
   } catch(e) {
-    console.log('⚠️ Voix par défaut...');
+    console.log('⚠️ Voix silencieuse...');
     execSync(`ffmpeg -f lavfi -i anullsrc=r=24000:cl=mono -t 5 -c:a libmp3lame -q:a 4 -y "${audioFile}"`, { stdio: 'pipe' });
   }
 
-  // 3. Montage vidéo + audio + texte
+  // 3. Montage avec TEXTE CORRIGÉ (ne déborde plus)
   console.log('✂️ Montage final...');
   const hookSafe = hook.replace(/'/g, "\\'");
-  const cmd = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,drawtext=text='${hookSafe}':fontsize=90:fontcolor=white:borderw=8:bordercolor=black:x=(w-text_w)/2:y=300,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=55:fontcolor=#25D366:borderw=5:bordercolor=black:x=(w-text_w)/2:y=1500" -c:v libx264 -preset fast -crf 24 -c:a aac -b:a 128k -shortest -pix_fmt yuv420p -y "${finalVideo}"`;
+  
+  // CORRECTION ICI : Police plus petite (65) et positions ajustées
+  const cmd = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,format=yuv420p,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${hookSafe}':fontsize=65:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=350:fix_bounds=true,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='📱 ${WHATSAPP_DEFAULT}':fontsize=42:fontcolor=#25D366:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1550:fix_bounds=true" -c:v libx264 -preset fast -crf 24 -c:a aac -b:a 128k -shortest -pix_fmt yuv420p -y "${finalVideo}"`;
   
   execSync(cmd, { stdio: 'pipe', timeout: 120000 });
 
@@ -96,7 +98,7 @@ async function main() {
   if (fs.existsSync(finalVideo)) {
     const size = fs.statSync(finalVideo).size;
     console.log(`✅ VIDÉO SONORISÉE: ${(size/1024/1024).toFixed(2)} MB`);
-    console.log(`🎬 ${usePexels ? 'Pexels' : 'Placeholder'} + Voix Denise`);
+    console.log(`🎬 ${usePexels ? 'Pexels' : 'Placeholder'} + Voix`);
     
     if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
       const msg = `🎬 Vidéo avec SON!%0A📊 ${(size/1024/1024).toFixed(2)} MB%0A🎵 Voix: fr-FR-Denise`;
