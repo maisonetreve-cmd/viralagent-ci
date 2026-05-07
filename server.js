@@ -184,13 +184,24 @@ function mountVideo(videoPath, audioPath, script, outputPath) {
   fs.writeFileSync(hookFile, hook);
   fs.writeFileSync(ctaFile, `CONTACTE-MOI\n📱 ${whatsapp}`);
 
+  // CORRECTION : Suppression des drawbox (th n'existe pas), uniquement drawtext
   const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" \
     -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p,
-    drawbox=x=100:y=(h*0.12):w=(w-200):h=(th+60):color=black@0.8:t=fill,
-    drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${hookFile}':fontsize=56:fontcolor=#FFD700:borderw=5:bordercolor=black:x=(w-text_w)/2:y=(h*0.15),
-    drawbox=x=100:y=(h*0.78):w=(w-200):h=(th+50):color=#25D366@0.9:t=fill,
-    drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${ctaFile}':fontsize=42:fontcolor=white:borderw=4:bordercolor=black:x=(w-text_w)/2:y=(h*0.80)" \
+    drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${hookFile}':fontsize=56:fontcolor=#FFD700:borderw=8:bordercolor=black:x=(w-text_w)/2:y=(h*0.25),
+    drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${ctaFile}':fontsize=42:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=(h*0.80)" \
     -c:v libx264 -preset veryfast -crf 24 -c:a aac -shortest -t 25 -pix_fmt yuv420p -y "${outputPath}"`;
+
+  try { 
+    execSync(cmd, { timeout: 120000, stdio: 'pipe' }); 
+    console.log('✅ Vidéo montée');
+  } catch (e) {
+    console.log('⚠️ Montage échoué, simplifié...');
+    execSync(`ffmpeg -i "${videoPath}" -i "${audioPath}" -c copy -y "${outputPath}"`, { stdio: 'pipe' });
+  } finally { 
+    try { fs.unlinkSync(hookFile); fs.unlinkSync(ctaFile); } catch(e) {} 
+  }
+  return outputPath;
+}
 
   try { execSync(cmd, { timeout: 120000, stdio: 'pipe' }); } 
   finally { try { fs.unlinkSync(hookFile); fs.unlinkSync(ctaFile); } catch(e) {} }
