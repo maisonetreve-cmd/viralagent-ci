@@ -1,31 +1,32 @@
-name: Test Video
+name: Debug Env
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v4
       
       - name: Installer FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          ffmpeg -version | head -1
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
       
-      - name: Générer vidéo
+      - name: Test variables
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WHATSAPP_DEFAULT: ${{ secrets.WHATSAPP_DEFAULT }}
         run: |
+          echo "PEXELS_API_KEY existe: ${{ secrets.PEXELS_API_KEY != '' }}"
+          echo "Longueur: ${#PEXELS_API_KEY}"
           node server.js
-          echo "=== Vérification ==="
-          ls -lh output/ || echo "❌ Dossier vide!"
       
       - name: Sauvegarder
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: video-test
+          name: debug-video
           path: output/*.mp4
-          if-no-files-found: warn
