@@ -49,7 +49,6 @@ async function sendTelegramMessage(text) {
 async function main() {
   console.log('🚀 Démarrage génération vidéo...');
   
-  // Créer dossier
   if (!fs.existsSync('output')) {
     fs.mkdirSync('output', { recursive: true });
     console.log('✅ Dossier output créé');
@@ -61,22 +60,22 @@ async function main() {
   const finalVideo = `output/vid_${timestamp}_final.mp4`;
   
   try {
-    // Étape 1: Vidéo brute
+    // Étape 1: Vidéo brute - CORRECTION: size=1080x1920 (avec x) au lieu de s=1080:1920
     console.log('🎬 Étape 1: Création vidéo brute...');
-    const cmd1 = `ffmpeg -f lavfi -i "color=c=0xFF6B35:s=1080:1920:d=15" -pix_fmt yuv420p -y "${rawVideo}"`;
+    const cmd1 = `ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:d=15 -pix_fmt yuv420p -y "${rawVideo}"`;
+    console.log('Commande:', cmd1);
     execSync(cmd1, { stdio: 'inherit' });
-    console.log('✅ Vidéo brute créée:', rawVideo);
     
-    // Vérifier
     if (!fs.existsSync(rawVideo)) {
       throw new Error('Vidéo brute non créée!');
     }
+    console.log('✅ Vidéo brute créée');
     
     // Étape 2: Audio
     console.log('🎵 Étape 2: Génération audio...');
     try {
       execSync(`edge-tts --voice fr-FR-DeniseNeural --text "Découvre cette astuce. Contacte moi sur WhatsApp." --write-media "${audioFile}" --rate=+10%`, { timeout: 30000 });
-      console.log('✅ Audio créé:', audioFile);
+      console.log('✅ Audio créé');
     } catch(e) {
       console.log('⚠️ Edge TTS échoue, création silence...');
       execSync(`ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 10 -c:a aac -y "${audioFile}"`);
@@ -86,34 +85,34 @@ async function main() {
       throw new Error('Audio non créé!');
     }
     
-    // Étape 3: Montage
+    // Étape 3: Montage - CORRECTION: size=1080x1920 aussi ici
     console.log('✂️ Étape 3: Montage final...');
     const hook = "Gagne 100k/mois avec cette methode!";
     const whatsapp = WHATSAPP_DEFAULT;
     
+    // Commande simplifiée sans fichiers texte externes pour éviter les problèmes de chemin
     const cmd3 = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,format=yuv420p,drawtext=text='${hook}':fontsize=60:fontcolor=white:borderw=5:bordercolor=black:x=(w-text_w)/2:y=h/3,drawtext=text='📱 ${whatsapp}':fontsize=40:fontcolor=#25D366:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.7" -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -y "${finalVideo}"`;
     
+    console.log('Commande montage:', cmd3);
     execSync(cmd3, { stdio: 'inherit' });
-    console.log('✅ Montage terminé:', finalVideo);
     
-    // Vérifier final
     if (!fs.existsSync(finalVideo)) {
       throw new Error('Vidéo finale non créée!');
     }
     
     const stats = fs.statSync(finalVideo);
-    console.log(`📊 Taille vidéo: ${(stats.size/1024/1024).toFixed(2)} MB`);
+    console.log(`📊 Taille: ${(stats.size/1024/1024).toFixed(2)} MB`);
     
     // Envoi Telegram
-    await sendTelegramMessage(`🎬 Vidéo générée!\n📁 ${finalVideo}\n📊 ${(stats.size/1024/1024).toFixed(2)} MB\n\n⬇️ Télécharge depuis les artifacts GitHub`);
+    await sendTelegramMessage(`🎬 Vidéo générée!\\n📁 ${finalVideo}\\n📊 ${(stats.size/1024/1024).toFixed(2)} MB\\n\\n⬇️ Télécharge depuis les artifacts`);
     
   } catch (error) {
     console.error('❌ ERREUR:', error.message);
-    await sendTelegramMessage(`❌ Erreur génération: ${error.message}`);
+    await sendTelegramMessage(`❌ Erreur: ${error.message}`);
     process.exit(1);
   }
   
-  console.log('✅ Terminé avec succès!');
+  console.log('✅ Terminé!');
 }
 
 main();
