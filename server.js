@@ -1,25 +1,11 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
-const https = require('https');
 
-// RÉCUPÉRATION AVEC TRIM (enlève les espaces)
-const PEXELS_API_KEY = (process.env.PEXELS_API_KEY || '').trim();
-const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
-const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
-const WHATSAPP_DEFAULT = (process.env.WHATSAPP_DEFAULT || '2250508506500').trim();
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
+const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506508';
 
-console.log('🔍 DEBUG VARIABLES ENV');
-console.log('=======================');
-console.log('Toutes les variables env:', Object.keys(process.env).filter(k => k.includes('PEXEL') || k.includes('TELEGRAM')));
-console.log('');
-console.log('PEXELS_API_KEY brut:', process.env.PEXELS_API_KEY ? `"${process.env.PEXELS_API_KEY.substring(0, 20)}..."` : 'undefined');
-console.log('PEXELS_API_KEY trim:', PEXELS_API_KEY ? `"${PEXELS_API_KEY.substring(0, 20)}..."` : 'undefined');
-console.log('Longueur:', PEXELS_API_KEY.length);
-console.log('Commence par espace?', process.env.PEXELS_API_KEY?.startsWith(' '));
-console.log('Contient \\n?', process.env.PEXELS_API_KEY?.includes('\n'));
-console.log('Contient \\r?', process.env.PEXELS_API_KEY?.includes('\r'));
-console.log('=======================');
-console.log('');
+console.log('🚀 ViralAgent - Fond animé pro');
 
 const outputDir = './output';
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
@@ -27,65 +13,47 @@ if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 const timestamp = Date.now();
 const finalVideo = `${outputDir}/video_${timestamp}_final.mp4`;
 
-// Si pas de clé Pexels, on crée quand même une vidéo
-if (!PEXELS_API_KEY) {
-  console.log('⚠️ PEXELS_API_KEY vide après trim');
-  console.log('⚠️ Création vidéo placeholder...');
-  
-  const hook = "Gagne 100k/mois!";
-  const cmd = `ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:rate=30 -t 10 -vf "drawtext=text='${hook}':fontsize=80:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=300,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=50:fontcolor=#25D366:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1400" -pix_fmt yuv420p -y "${finalVideo}"`;
-  
-  execSync(cmd, { stdio: 'inherit' });
+// HOOKS rotation pour plusieurs vidéos
+const hooks = [
+  "Gagne 100k/mois!",
+  "3 erreurs a eviter",
+  "La methode secrete",
+  "Transforme ton tel",
+  "Revenus passifs CI"
+];
+const hook = hooks[Math.floor(Math.random() * hooks.length)];
+
+console.log('🎬 Création fond animé pro...');
+
+// Commande FFmpeg avec effet PARTICULES + dégradé animé
+const cmd = `ffmpeg -f lavfi -i "sine=frequency=1000:duration=10" -f lavfi -i "color=black:size=1080x1920" -f lavfi -i "life=sine=1/10,format=rgba,geq='r=255*gt(random(1)*sin(X/100+T*2),0.95):g=255*gt(random(1)*sin(Y/100+T*3),0.95):b=255:a=255*gt(random(1),0.98)'[particles];[1:v][particles]overlay=format=auto,format=yuv420p" -i "color=c=0xFF6B35@0.3:size=1080x1920" -filter_complex "[2:v]fade=t=out:st=8:d=2[anim];[3:v][anim]overlay=format=auto,drawtext=text='${hook}':fontsize=90:fontcolor=white:borderw=8:bordercolor=black:x=(w-text_w)/2:y=300:shadowx=3:shadowy=3:shadowcolor=black,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=55:fontcolor=#25D366:borderw=5:bordercolor=white:x=(w-text_w)/2:y=1500,drawtext=text='👉 LIEN EN BIO':fontsize=40:fontcolor=yellow:borderw=3:bordercolor=black:x=(w-text_w)/2:y=1650" -t 10 -c:v libx264 -preset fast -crf 26 -pix_fmt yuv420p -y "${finalVideo}"`;
+
+try {
+  execSync(cmd, { stdio: 'pipe', timeout: 120000 });
   
   if (fs.existsSync(finalVideo)) {
-    console.log(`✅ Vidéo placeholder créée`);
+    const size = fs.statSync(finalVideo).size;
+    console.log(`✅ Vidéo créée: ${(size/1024).toFixed(2)} KB`);
+    console.log(`📝 Hook: ${hook}`);
+    
+    // Notifier Telegram
+    if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+      const https = require('https');
+      const msg = `🎬 Vidéo animée OK!%0A📝 ${hook}%0A📊 ${(size/1024).toFixed(2)} KB`;
+      https.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${msg}`);
+    }
+  } else {
+    throw new Error('Fichier non créé');
   }
-  process.exit(0);
+} catch (e) {
+  console.error('❌ Erreur:', e.message);
+  
+  // Fallback ultra-simple si la commande complexe échoue
+  console.log('🔄 Fallback simple...');
+  const simpleCmd = `ffmpeg -f lavfi -i "gradient=s=1080x1920:r=30:d=10:start_color=FF6B35:end_color=8338EC" -vf "drawtext=text='${hook}':fontsize=80:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=400,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=50:fontcolor=#25D366:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1400" -pix_fmt yuv420p -y "${finalVideo}"`;
+  
+  execSync(simpleCmd, { stdio: 'pipe' });
+  console.log('✅ Vidéo fallback créée');
 }
 
-// Si clé présente, essayer Pexels
-console.log('✅ Clé Pexels détectée, tentative API...');
-
-const options = {
-  hostname: 'api.pexels.com',
-  path: '/videos/search?query=business&orientation=portrait&per_page=1',
-  method: 'GET',
-  headers: {
-    'Authorization': PEXELS_API_KEY
-  },
-  timeout: 10000
-};
-
-const req = https.request(options, (res) => {
-  console.log('Status API:', res.statusCode);
-  let data = '';
-  res.on('data', chunk => data += chunk);
-  res.on('end', () => {
-    if (res.statusCode === 200) {
-      console.log('✅ API Pexels accessible!');
-      try {
-        const json = JSON.parse(data);
-        console.log('Vidéos trouvées:', json.videos?.length || 0);
-      } catch(e) {
-        console.log('Réponse:', data.substring(0, 200));
-      }
-    } else {
-      console.log('❌ Erreur API:', res.statusCode);
-      console.log('Réponse:', data.substring(0, 500));
-    }
-    
-    // Créer vidéo quand même
-    const hook = "Gagne 100k/mois!";
-    const cmd = `ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:rate=30 -t 10 -vf "drawtext=text='${hook}':fontsize=80:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=300,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=50:fontcolor=#25D366:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1400" -pix_fmt yuv420p -y "${finalVideo}"`;
-    
-    execSync(cmd, { stdio: 'inherit' });
-    console.log(fs.existsSync(finalVideo) ? '✅ Vidéo créée' : '❌ Échec');
-  });
-});
-
-req.on('error', (e) => {
-  console.log('❌ Erreur requête:', e.message);
-  process.exit(1);
-});
-
-req.end();
+console.log('✅ Terminé!');
