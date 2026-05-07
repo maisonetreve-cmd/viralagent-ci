@@ -2,155 +2,90 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506500';
-const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
+// RÉCUPÉRATION AVEC TRIM (enlève les espaces)
+const PEXELS_API_KEY = (process.env.PEXELS_API_KEY || '').trim();
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
+const WHATSAPP_DEFAULT = (process.env.WHATSAPP_DEFAULT || '2250508506500').trim();
 
-console.log('🚀 ViralAgent Pro');
-console.log('==================');
-console.log('PEXELS_API_KEY:', PEXELS_API_KEY ? `Présent (${PEXELS_API_KEY.length} car)` : 'MANQUANT');
+console.log('🔍 DEBUG VARIABLES ENV');
+console.log('=======================');
+console.log('Toutes les variables env:', Object.keys(process.env).filter(k => k.includes('PEXEL') || k.includes('TELEGRAM')));
+console.log('');
+console.log('PEXELS_API_KEY brut:', process.env.PEXELS_API_KEY ? `"${process.env.PEXELS_API_KEY.substring(0, 20)}..."` : 'undefined');
+console.log('PEXELS_API_KEY trim:', PEXELS_API_KEY ? `"${PEXELS_API_KEY.substring(0, 20)}..."` : 'undefined');
+console.log('Longueur:', PEXELS_API_KEY.length);
+console.log('Commence par espace?', process.env.PEXELS_API_KEY?.startsWith(' '));
+console.log('Contient \\n?', process.env.PEXELS_API_KEY?.includes('\n'));
+console.log('Contient \\r?', process.env.PEXELS_API_KEY?.includes('\r'));
+console.log('=======================');
+console.log('');
 
-// Créer dossier
 const outputDir = './output';
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
-}
+if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
 const timestamp = Date.now();
-const rawVideo = `${outputDir}/raw_${timestamp}.mp4`;
 const finalVideo = `${outputDir}/video_${timestamp}_final.mp4`;
 
-// Fonction téléchargement Pexels
-function downloadPexels() {
-  return new Promise((resolve) => {
-    if (!PEXELS_API_KEY) {
-      console.log('❌ Clé Pexels manquante');
-      resolve(false);
-      return;
-    }
-
-    console.log('🔍 Recherche Pexels...');
-    
-    const options = {
-      hostname: 'api.pexels.com',
-      path: '/videos/search?query=african+business&orientation=portrait&per_page=5',
-      method: 'GET',
-      headers: {
-        'Authorization': PEXELS_API_KEY.trim() // trim pour enlever espaces
-      },
-      timeout: 10000
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.videos && json.videos.length > 0) {
-            const video = json.videos[0];
-            const file = video.video_files.find(f => f.quality === 'sd' || f.quality === 'hd');
-            if (file && file.link) {
-              console.log('✅ Vidéo trouvée, téléchargement...');
-              downloadFile(file.link, rawVideo).then(resolve).catch(() => resolve(false));
-              return;
-            }
-          }
-          console.log('⚠️ Aucune vidéo trouvée');
-          resolve(false);
-        } catch(e) {
-          console.log('⚠️ Erreur parse JSON:', e.message);
-          resolve(false);
-        }
-      });
-    });
-
-    req.on('error', (e) => {
-      console.log('⚠️ Erreur API:', e.message);
-      resolve(false);
-    });
-    
-    req.on('timeout', () => {
-      req.destroy();
-      console.log('⚠️ Timeout API');
-      resolve(false);
-    });
-    
-    req.end();
-  });
-}
-
-function downloadFile(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, { timeout: 30000 }, (response) => {
-      if (response.statusCode === 302 && response.headers.location) {
-        downloadFile(response.headers.location, dest).then(resolve).catch(reject);
-        return;
-      }
-      response.pipe(file);
-      file.on('finish', () => {
-        file.close();
-        if (fs.statSync(dest).size > 10000) { // Plus de 10KB
-          resolve(true);
-        } else {
-          reject(new Error('Fichier trop petit'));
-        }
-      });
-    }).on('error', reject);
-  });
-}
-
-async function main() {
-  // Essayer Pexels
-  let usePexels = await downloadPexels();
+// Si pas de clé Pexels, on crée quand même une vidéo
+if (!PEXELS_API_KEY) {
+  console.log('⚠️ PEXELS_API_KEY vide après trim');
+  console.log('⚠️ Création vidéo placeholder...');
   
-  if (!usePexels || !fs.existsSync(rawVideo)) {
-    console.log('🎨 Création fond couleur...');
-    execSync(`ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:rate=30 -t 15 -pix_fmt yuv420p -y "${rawVideo}"`, { stdio: 'pipe' });
-    usePexels = false;
-  }
-
-  // Audio
-  const audioFile = `${outputDir}/audio_${timestamp}.mp3`;
-  try {
-    execSync(`edge-tts --voice fr-FR-DeniseNeural --text "Découvre cette astuce maintenant." --write-media "${audioFile}" --rate=+15%`, { timeout: 30000 });
-  } catch(e) {
-    execSync(`ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 10 -c:a aac -y "${audioFile}"`, { stdio: 'pipe' });
-  }
-
-  // Montage final
-  console.log('✂️ Montage final...');
-  const hook = "Gagne 100k/mois!".replace(/'/g, "\\'");
-  const cmd = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,format=yuv420p,drawtext=text='${hook}':fontsize=90:fontcolor=white:borderw=8:bordercolor=black:x=(w-text_w)/2:y=250,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=55:fontcolor=#25D366:borderw=5:bordercolor=black:x=(w-text_w)/2:y=1500" -c:v libx264 -preset fast -crf 26 -c:a aac -shortest -y "${finalVideo}"`;
+  const hook = "Gagne 100k/mois!";
+  const cmd = `ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:rate=30 -t 10 -vf "drawtext=text='${hook}':fontsize=80:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=300,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=50:fontcolor=#25D366:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1400" -pix_fmt yuv420p -y "${finalVideo}"`;
   
-  execSync(cmd, { stdio: 'pipe' });
-
-  // Nettoyer
-  try { fs.unlinkSync(rawVideo); } catch(e) {}
-  try { fs.unlinkSync(audioFile); } catch(e) {}
-
-  // Vérification
+  execSync(cmd, { stdio: 'inherit' });
+  
   if (fs.existsSync(finalVideo)) {
-    const size = fs.statSync(finalVideo).size;
-    console.log(`✅ VIDÉO CRÉÉE: ${finalVideo}`);
-    console.log(`📊 Taille: ${(size/1024/1024).toFixed(2)} MB`);
-    console.log(`🎬 Source: ${usePexels ? 'Pexels' : 'Placeholder'}`);
-    
-    // Telegram
-    if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
-      const msg = `🎬 Vidéo ${usePexels ? 'Pexels' : 'Placeholder'} OK\n📊 ${(size/1024/1024).toFixed(2)} MB\n📱 ${WHATSAPP_DEFAULT}`;
-      const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${encodeURIComponent(msg)}`;
-      https.get(url).on('error', () => {});
-    }
-  } else {
-    console.error('❌ Échec création vidéo');
-    process.exit(1);
+    console.log(`✅ Vidéo placeholder créée`);
   }
+  process.exit(0);
 }
 
-main().catch(err => {
-  console.error('❌ Erreur:', err.message);
+// Si clé présente, essayer Pexels
+console.log('✅ Clé Pexels détectée, tentative API...');
+
+const options = {
+  hostname: 'api.pexels.com',
+  path: '/videos/search?query=business&orientation=portrait&per_page=1',
+  method: 'GET',
+  headers: {
+    'Authorization': PEXELS_API_KEY
+  },
+  timeout: 10000
+};
+
+const req = https.request(options, (res) => {
+  console.log('Status API:', res.statusCode);
+  let data = '';
+  res.on('data', chunk => data += chunk);
+  res.on('end', () => {
+    if (res.statusCode === 200) {
+      console.log('✅ API Pexels accessible!');
+      try {
+        const json = JSON.parse(data);
+        console.log('Vidéos trouvées:', json.videos?.length || 0);
+      } catch(e) {
+        console.log('Réponse:', data.substring(0, 200));
+      }
+    } else {
+      console.log('❌ Erreur API:', res.statusCode);
+      console.log('Réponse:', data.substring(0, 500));
+    }
+    
+    // Créer vidéo quand même
+    const hook = "Gagne 100k/mois!";
+    const cmd = `ffmpeg -f lavfi -i color=c=0xFF6B35:size=1080x1920:rate=30 -t 10 -vf "drawtext=text='${hook}':fontsize=80:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=300,drawtext=text='📱 ${WHATSAPP_DEFAULT}':fontsize=50:fontcolor=#25D366:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1400" -pix_fmt yuv420p -y "${finalVideo}"`;
+    
+    execSync(cmd, { stdio: 'inherit' });
+    console.log(fs.existsSync(finalVideo) ? '✅ Vidéo créée' : '❌ Échec');
+  });
+});
+
+req.on('error', (e) => {
+  console.log('❌ Erreur requête:', e.message);
   process.exit(1);
 });
+
+req.end();
