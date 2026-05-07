@@ -1,17 +1,11 @@
-// ViralAgent Pro - Version complète et fonctionnelle
 const { execSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
 
-// Configuration
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const WHATSAPP_DEFAULT = process.env.WHATSAPP_DEFAULT || '2250508506500';
-
-const LLM_KEY = GROQ_API_KEY;
-const LLM_PROVIDER = GROQ_API_KEY.startsWith('gsk_') ? 'groq' : '';
 
 function fetchJSON(url, options = {}) {
   return new Promise((resolve, reject) => {
@@ -38,136 +32,88 @@ function fetchJSON(url, options = {}) {
 }
 
 async function sendTelegramMessage(text) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log('⚠️ Telegram non configuré');
+    return;
+  }
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   const encoded = encodeURIComponent(text);
   try {
     await fetchJSON(`${url}?chat_id=${TELEGRAM_CHAT_ID}&text=${encoded}&parse_mode=HTML`);
-  } catch(e) { console.log('Telegram error:', e.message); }
-}
-
-async function uploadToCloud(filePath) {
-  console.log('   Upload vers cloud...');
-  const fileData = fs.readFileSync(filePath);
-  const boundary = '----FormBoundary' + Date.now();
-  const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`),
-    fileData,
-    Buffer.from(`\r\n--${boundary}--\r\n`)
-  ]);
-  
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'file.io',
-      path: '/',
-      method: 'POST',
-      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
-      timeout: 120000
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { const j = JSON.parse(data); resolve(j.link || null); } 
-        catch { resolve(null); }
-      });
-    });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-    req.write(body);
-    req.end();
-  });
-}
-
-async function generateScript() {
-  // Hook simple sans LLM pour test (tu peux remettre Groq après)
-  return { 
-    hook: 'Gagne 100k/mois avec cette methode!', 
-    caption: 'Decouvre comment faire', 
-    hashtags: '#CIV225 #Business' 
-  };
-}
-
-function generateVoice(script, outputPath) {
-  const text = `${script.hook}. Contacte-moi.`.replace(/['"\\]/g, '').substring(0, 200);
-  try {
-    execSync(`edge-tts --voice fr-FR-DeniseNeural --text "${text}" --write-media "${outputPath}" --rate=+10%`, { timeout: 30000, stdio: 'pipe' });
-    console.log('✅ Voix generee');
-  } catch (e) {
-    console.log('⚠️ Edge TTS echoue, silence genere');
-    execSync(`ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 10 -c:a aac -y "${outputPath}"`, { stdio: 'pipe' });
+    console.log('✅ Message Telegram envoyé');
+  } catch(e) { 
+    console.log('❌ Telegram error:', e.message); 
   }
-}
-
-function mountVideo(videoPath, audioPath, script, outputPath) {
-  console.log('🎬 Montage video...');
-  
-  const hook = (script.hook || 'Decouvre!').replace(/['"\\]/g, '').substring(0, 35);
-  const whatsapp = WHATSAPP_DEFAULT;
-  
-  const hookFile = `/tmp/hook_${Date.now()}.txt`;
-  const ctaFile = `/tmp/cta_${Date.now()}.txt`;
-  
-  fs.writeFileSync(hookFile, hook);
-  fs.writeFileSync(ctaFile, `CONTACTE-MOI\n📱 ${whatsapp}`);
-
-  const cmd = `ffmpeg -i "${videoPath}" -i "${audioPath}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${hookFile}':fontsize=56:fontcolor=#FFD700:borderw=8:bordercolor=black:x=(w-text_w)/2:y=(h*0.25),drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${ctaFile}':fontsize=42:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=(h*0.80)" -c:v libx264 -preset veryfast -crf 24 -c:a aac -shortest -t 25 -pix_fmt yuv420p -y "${outputPath}"`;
-
-  try { 
-    execSync(cmd, { timeout: 120000, stdio: 'pipe' }); 
-    console.log('✅ Video montee');
-  } catch (e) {
-    console.log('⚠️ Montage simplifie:', e.message);
-    execSync(`ffmpeg -i "${videoPath}" -i "${audioPath}" -c copy -y "${outputPath}"`, { stdio: 'pipe' });
-  } finally { 
-    try { fs.unlinkSync(hookFile); fs.unlinkSync(ctaFile); } catch(e) {} 
-  }
-  return outputPath;
 }
 
 async function main() {
-  console.log('🚀 ViralAgent Pro - Generation de video');
+  console.log('🚀 Démarrage génération vidéo...');
   
-  fs.mkdirSync('output', { recursive: true });
-  
-  // 1. Script
-  console.log('📝 Generation script...');
-  const script = await generateScript();
-  
-  // 2. Video brute (placeholder Pexels ou couleur)
-  console.log('🎬 Creation video brute...');
-  const rawVideo = `output/vid_${Date.now()}_raw.mp4`;
-  execSync(`ffmpeg -f lavfi -i "color=c=0xFF6B35:s=1080:1920:d=20" -c:v libx264 -pix_fmt yuv420p -y "${rawVideo}"`, { stdio: 'pipe' });
-  
-  // 3. Voix
-  console.log('🗣️ Generation voix...');
-  const audioFile = `output/vid_${Date.now()}.mp3`;
-  generateVoice(script, audioFile);
-  
-  // 4. Montage final
-  console.log('✂️ Montage final...');
-  const finalVideo = `output/vid_${Date.now()}_final.mp4`;
-  mountVideo(rawVideo, audioFile, script, finalVideo);
-  
-  // 5. Upload et envoi Telegram
-  console.log('☁️ Upload et envoi Telegram...');
-  const link = await uploadToCloud(finalVideo);
-  
-  if (link) {
-    const message = `🎬 <b>Video prete!</b>\n\n📝 ${script.hook}\n\n⬇️ <a href="${link}">TELECHARGER</a>\n\n📱 ${WHATSAPP_DEFAULT}`;
-    await sendTelegramMessage(message);
-    console.log('✅ Lien envoye sur Telegram');
-  } else {
-    console.log('❌ Echec upload');
+  // Créer dossier
+  if (!fs.existsSync('output')) {
+    fs.mkdirSync('output', { recursive: true });
+    console.log('✅ Dossier output créé');
   }
   
-  // 6. Nettoyage
-  try { fs.unlinkSync(rawVideo); } catch(e) {}
-  try { fs.unlinkSync(audioFile); } catch(e) {}
+  const timestamp = Date.now();
+  const rawVideo = `output/vid_${timestamp}_raw.mp4`;
+  const audioFile = `output/vid_${timestamp}.mp3`;
+  const finalVideo = `output/vid_${timestamp}_final.mp4`;
   
-  console.log('✅ Termine! Video dans:', finalVideo);
+  try {
+    // Étape 1: Vidéo brute
+    console.log('🎬 Étape 1: Création vidéo brute...');
+    const cmd1 = `ffmpeg -f lavfi -i "color=c=0xFF6B35:s=1080:1920:d=15" -pix_fmt yuv420p -y "${rawVideo}"`;
+    execSync(cmd1, { stdio: 'inherit' });
+    console.log('✅ Vidéo brute créée:', rawVideo);
+    
+    // Vérifier
+    if (!fs.existsSync(rawVideo)) {
+      throw new Error('Vidéo brute non créée!');
+    }
+    
+    // Étape 2: Audio
+    console.log('🎵 Étape 2: Génération audio...');
+    try {
+      execSync(`edge-tts --voice fr-FR-DeniseNeural --text "Découvre cette astuce. Contacte moi sur WhatsApp." --write-media "${audioFile}" --rate=+10%`, { timeout: 30000 });
+      console.log('✅ Audio créé:', audioFile);
+    } catch(e) {
+      console.log('⚠️ Edge TTS échoue, création silence...');
+      execSync(`ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 10 -c:a aac -y "${audioFile}"`);
+    }
+    
+    if (!fs.existsSync(audioFile)) {
+      throw new Error('Audio non créé!');
+    }
+    
+    // Étape 3: Montage
+    console.log('✂️ Étape 3: Montage final...');
+    const hook = "Gagne 100k/mois avec cette methode!";
+    const whatsapp = WHATSAPP_DEFAULT;
+    
+    const cmd3 = `ffmpeg -i "${rawVideo}" -i "${audioFile}" -vf "scale=1080:1920,format=yuv420p,drawtext=text='${hook}':fontsize=60:fontcolor=white:borderw=5:bordercolor=black:x=(w-text_w)/2:y=h/3,drawtext=text='📱 ${whatsapp}':fontsize=40:fontcolor=#25D366:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.7" -c:v libx264 -preset fast -crf 28 -c:a aac -shortest -y "${finalVideo}"`;
+    
+    execSync(cmd3, { stdio: 'inherit' });
+    console.log('✅ Montage terminé:', finalVideo);
+    
+    // Vérifier final
+    if (!fs.existsSync(finalVideo)) {
+      throw new Error('Vidéo finale non créée!');
+    }
+    
+    const stats = fs.statSync(finalVideo);
+    console.log(`📊 Taille vidéo: ${(stats.size/1024/1024).toFixed(2)} MB`);
+    
+    // Envoi Telegram
+    await sendTelegramMessage(`🎬 Vidéo générée!\n📁 ${finalVideo}\n📊 ${(stats.size/1024/1024).toFixed(2)} MB\n\n⬇️ Télécharge depuis les artifacts GitHub`);
+    
+  } catch (error) {
+    console.error('❌ ERREUR:', error.message);
+    await sendTelegramMessage(`❌ Erreur génération: ${error.message}`);
+    process.exit(1);
+  }
+  
+  console.log('✅ Terminé avec succès!');
 }
 
-main().catch(err => {
-  console.error('❌ Erreur:', err.message);
-  process.exit(1);
-});
+main();
