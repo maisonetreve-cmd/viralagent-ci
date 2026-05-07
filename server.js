@@ -189,7 +189,7 @@ function mountVideo(videoPath, audioPath, script, outputPath) {
     -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p,
     drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${hookFile}':fontsize=56:fontcolor=#FFD700:borderw=8:bordercolor=black:x=(w-text_w)/2:y=(h*0.25),
     drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile='${ctaFile}':fontsize=42:fontcolor=white:borderw=6:bordercolor=black:x=(w-text_w)/2:y=(h*0.80)" \
-    -c:v libx264 -preset veryfast -crf 24 -c:a aac -shortest -t 25 -pix_fmt yuv420p -y "${outputPath}"`;
+    -c:v libx264 -preset veryfast -crf 24 -c:a aac -shortest -t 25 -pix_fmt yuv420p -y "${outputPath}"`};
 
   try { 
     execSync(cmd, { timeout: 120000, stdio: 'pipe' }); 
